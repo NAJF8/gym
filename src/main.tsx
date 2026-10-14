@@ -1,4 +1,5 @@
-import { StrictMode, useEffect, useMemo, useState } from 'react'
+import { Component, StrictMode, useEffect, useState } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Activity, ArrowLeft, BarChart3, Bell, CalendarDays, Check, ChevronLeft, Dumbbell, FileText, LayoutDashboard, LogOut, Menu, Plus, Search, Settings, ShieldCheck, UserRound, Users, X, Trash2, Pencil, Play, Copy, Download, Clock, QrCode } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
@@ -115,7 +116,7 @@ function App(){
    <button className="small-link" onClick={()=>setSelectedExercise(e)}>شرح <ArrowLeft size={15}/></button>
   </div>):<div className="empty">لم يضف الكابتن تمارين لهذا اليوم بعد.</div>}</div>
  }
- function sectionTitle(title:string,subtitle:string,action?:React.ReactNode){return <div className="section-title"><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</div>}
+ function sectionTitle(title:string,subtitle:string,action?:ReactNode){return <div className="section-title"><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</div>}
  return <div className="app-shell">
   <div className="mobile-header"><button className="icon-button" onClick={()=>setMenu(true)} aria-label="فتح القائمة"><Menu size={22}/></button><strong>{gymName}</strong><span className="demo-pill">نسخة تجريبية</span></div>
   <aside className={'sidebar '+(menu?'sidebar-open':'')}>
@@ -159,4 +160,10 @@ function App(){
   {alert&&<div className="toast" role="status">{alert}</div>}
  </div>
 }
-createRoot(document.getElementById('root')!).render(<StrictMode><App/></StrictMode>)
+class AppErrorBoundary extends Component<{children:ReactNode},{error:string|null}> {
+ state:{error:string|null}={error:null}
+ static getDerivedStateFromError(error:Error){return {error:error.message}}
+ componentDidCatch(error:Error,info:ErrorInfo){console.error('AL ASAS FIT rendering error',error,info)}
+ render(){if(this.state.error)return <div dir="rtl" style={{fontFamily:'Tahoma,sans-serif',maxWidth:560,margin:'12vh auto',padding:28,background:'#fff',border:'1px solid #ddd',borderRadius:10,color:'#222'}}><h2>تعذر تشغيل واجهة AL ASAS FIT</h2><p>حدث خطأ أثناء عرض الموقع. جرّب تحديث الصفحة. إذا استمر الخطأ، انسخ التفاصيل وأرسلها للدعم.</p><pre style={{whiteSpace:'pre-wrap',wordBreak:'break-word',fontSize:12,background:'#f4f4f4',padding:12}}>{this.state.error}</pre><button onClick={()=>window.location.reload()} style={{background:'#294e42',color:'#fff',padding:'9px 18px',border:0,borderRadius:5}}>إعادة المحاولة</button></div>;return this.props.children}
+}
+createRoot(document.getElementById('root')!).render(<StrictMode><AppErrorBoundary><App/></AppErrorBoundary></StrictMode>)
