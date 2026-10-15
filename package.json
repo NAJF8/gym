@@ -10,12 +10,13 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "firebase": "^13.0.0",
     "lucide-react": "latest",
     "qrcode.react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "vite": "latest",
-    "typescript": "latest"
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",
