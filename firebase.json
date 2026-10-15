@@ -1,4 +1,18 @@
 {
+    "database": {
+        "rules": "database.rules.json"
+    },
+    "emulators": {
+        "auth": {
+            "port": 9099
+        },
+        "database": {
+            "port": 9000
+        },
+        "ui": {
+            "enabled": false
+        }
+    },
     "hosting":  {
                     "public":  "dist",
                     "ignore":  [
@@ -8,16 +22,12 @@
                                ],
                     "rewrites":  [
                                      {
-                                         "destination":  "/admin/index.html",
-                                         "source":  "/admin"
+                                         "source":  "/admin/**",
+                                         "destination":  "/admin/index.html"
                                      },
                                      {
-                                         "destination":  "/admin/index.html",
-                                         "source":  "/admin/**"
-                                     },
-                                     {
-                                         "destination":  "/index.html",
-                                         "source":  "**"
+                                         "source":  "**",
+                                         "destination":  "/index.html"
                                      }
                                  ]
                 }

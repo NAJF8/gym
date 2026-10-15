@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import {QRCodeSVG} from 'qrcode.react'
 import './course-print.css'
+import { safeVideoUrl } from './videoUrl'
 type M={id:number;name:string;weight:number;height:number;plan:string}
 type E={id:number;name:string;muscle:string;sets:number;reps:string;weight:string;video:string}
 type C={id:number;name:string;days:{title:string;muscle:string;exercises:number[]}[]}
@@ -45,7 +46,7 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
    <h2 className="sheet-title">{course.name}</h2>
    {course.days.map((d,i)=><section className="sheet-day" key={i}>
     <h3>{d.title} <small>{d.muscle}</small></h3>
-    <ol>{d.exercises.map((id,j)=>{const ex=exercises.find(e=>e.id===id);return ex?<li key={j}><span className="sheet-exercise">{ex.name}</span><span className="sheet-prescription">{ex.sets} × {ex.reps}{ex.weight&&ex.weight!=='0'?' — '+ex.weight+' كغم':''}</span>{qr&&ex.video&&<QRCodeSVG value={ex.video} size={38}/>}</li>:null})}</ol>
+   <ol>{d.exercises.map((id,j)=>{const ex=exercises.find(e=>e.id===id);const video=ex&&safeVideoUrl(ex.video);return ex?<li key={j}><span className="sheet-exercise">{ex.name}</span><span className="sheet-prescription">{ex.sets} × {ex.reps}{ex.weight&&ex.weight!=='0'?' — '+ex.weight+' كغم':''}</span>{qr&&video&&<QRCodeSVG value={video} size={38}/>}</li>:null})}</ol>
     {!d.exercises.length&&<p className="sheet-empty">لم تتم إضافة تمارين لهذا اليوم.</p>}
    </section>)}
    {notes&&<div className="sheet-notes"><b>ملاحظات الكابتن</b><p>{notes}</p></div>}
