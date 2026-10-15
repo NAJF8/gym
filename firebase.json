@@ -1,0 +1,24 @@
+{
+    "hosting":  {
+                    "public":  "dist",
+                    "ignore":  [
+                                   "firebase.json",
+                                   "**/.*",
+                                   "**/node_modules/**"
+                               ],
+                    "rewrites":  [
+                                     {
+                                         "destination":  "/admin/index.html",
+                                         "source":  "/admin"
+                                     },
+                                     {
+                                         "destination":  "/admin/index.html",
+                                         "source":  "/admin/**"
+                                     },
+                                     {
+                                         "destination":  "/index.html",
+                                         "source":  "**"
+                                     }
+                                 ]
+                }
+}
