@@ -49,3 +49,60 @@ table{color:var(--text)}th{color:var(--muted);border-color:var(--line)}td{color:
 .exercise-detail-page{background:#f6f4ef}.exercise-detail-card{background:#fff;border-color:#e5e7eb}.exercise-detail-card h1{color:#1e1f1e}.exercise-detail-card>p{color:#525960}.detail-grid{border-color:#e5e7eb}.detail-grid span{color:#525960;border-color:#e5e7eb}.detail-grid strong{color:#1e1f1e}
 @media(max-width:900px){.ready-course-grid{grid-template-columns:1fr}}
 @media print{body{background:#fff!important}.sidebar-wrap,.topbar,.modal-overlay,.content,.member-portal,.member-empty{display:none!important}.print-only{display:block!important}}
+
+
+/* 2026-10-15 — AL ASAS FIT cohesive light UI; sidebar remains intentionally dark. */
+:root{color-scheme:light;--bg:#F6F4EF;--surface:#FFF;--surface-2:#FFF;--line:#E5E7EB;--text:#1E1F1E;--muted:#525960;--lime:#B7FF2A;--lime-dim:rgba(183,255,42,.2)}
+html,body,#root,.app-shell,.main-area{background:var(--bg);color:var(--text)}
+.topbar,.content,.welcome-row,.section-heading{color:var(--text)}
+.topbar h1,.welcome-row h2,.section-heading h2,.panel h2,.panel h3,.stat-card strong,.quick-panel h2,.settings-block h2{color:var(--text)}
+.topbar .eyebrow,.welcome-row p,.section-heading p,.panel p,.stat-card span,.stat-card small{color:var(--muted)}
+.stat-card,.panel,.settings-block,.muscle-list,.barcode-picker,.exercise-card,.ready-course,.portal-workout,.member-hero{background:#fff;color:var(--text);border-color:var(--line)}
+.stat-icon{background:#EAF5D2;color:#416310}
+.steps span,.quick-panel .steps span,.exercise-card-body b,.review-day span,.ready-exercise,.portal-exercise,.portal-exercise b{color:var(--text)}
+.steps b{color:#416310;background:#EAF5D2}
+.search-top,.search-box,.search-box input{background:#fff;color:var(--text);border-color:var(--line)}
+.search-top{box-shadow:0 1px 3px rgba(0,0,0,.04)}
+table,th,td,.member-cell b{color:var(--text)}th{color:var(--muted)}td,th{border-color:var(--line)}
+tbody tr:hover{background:#F8FAF4}
+.avatar:not(.lime){background:#E8ECE8;color:#1E1F1E}
+.secondary-btn,.icon-btn{color:var(--text)}
+.secondary-btn{background:#fff;border-color:var(--line)}
+.icon-btn:hover{background:#EDF1E8;color:var(--text)}
+.text-btn,.row-actions button:hover,.row-icon:hover,.portal-exercise a{color:#4C7700}
+.primary-btn{background:var(--lime);color:#111}
+.primary-btn:hover{background:#A5E925}
+.modal,.modal.wide{background:#fff;color:var(--text);border-color:var(--line)}
+.modal-head h2,.wizard-pane h3,.review-day h4,.ready-day h4{color:var(--text)}
+.form-grid label,.color-field,.selected-exercises label,.picker-exercises small{color:var(--muted)}
+.form-grid input,.color-field input,.selected-exercises input{background:#fff;color:var(--text);border-color:#C6CDC6}
+.picker-exercises button,.days-choice button,.day-switch button{background:#fff;color:var(--text);border-color:var(--line)}
+.picker-exercises button.picked,.days-choice button.active,.day-switch button.active{background:#EAF7C5;color:var(--text);border-color:#80A532}
+.picker-muscles button.active,.muscle-list button.selected,.barcode-picker button.selected{background:#EAF7C5;color:#1E1F1E}
+.review-summary{background:#F7F8F4;color:var(--text);border-color:var(--line)}
+.selected-exercises>div,.review-day,.ready-day,.exercise-row,.portal-exercise{border-color:var(--line)}
+.day-tabs button{background:#F5F6F3;border:1px solid #D5DCD2;color:#344034}
+.day-tabs button span{color:#525960}
+.day-tabs button.active{background:#EAF7C5;border-color:#86AE32;color:#1E1F1E}
+.day-tabs button.active span{color:#3C5C10}
+.member-hero,.member-portal{background:#fff;color:var(--text)}
+.member-portal{background:var(--bg)}
+.member-hero h1,.member-hero h2,.member-hero p{color:var(--text)}
+.portal-workout{background:#fff}
+.check-btn{border-color:#737B73;color:#1E1F1E}
+.check-btn.done{background:var(--lime);border-color:var(--lime)}
+.settings-block .toggle-list label,.upload-box span{color:var(--text)}
+.upload-box{border-color:#C6CDC6;color:var(--muted)}
+.exercise-detail-card,.exercise-detail-page{color:var(--text)}
+/* Dark palette is intentionally confined to navigation. */
+.sidebar,.sidebar-wrap .sidebar{background:#161816;color:#F4F1E8;border-color:#303530}
+.sidebar .brand strong,.sidebar .coach-mini b{color:#F4F1E8}
+.sidebar .brand span,.sidebar .coach-mini span{color:#BFC5BF}
+.sidebar .nav-item{color:#CFD5CF}
+.sidebar .nav-item.active,.sidebar .nav-item:hover{color:#fff;background:rgba(183,255,42,.16)}
+.sidebar .view-switch{background:#202320;border-color:#3A413A}
+.sidebar .view-switch button{color:#D2D8D2}
+.sidebar .view-switch button.active{background:#303A2C;color:#fff}
+.sidebar .avatar:not(.lime){background:#343C34;color:#fff}
+:where(button,input,textarea,select):focus-visible{outline:2px solid #6D941B;outline-offset:2px}
+@media(max-width:600px){.topbar,.content{background:var(--bg)}.stat-card{background:#fff}.modal{background:#fff}}
