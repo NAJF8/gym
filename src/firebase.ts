@@ -1,20 +1,20 @@
-import { getApp, getApps, initializeApp } from 'firebase/app'
+import { getApps, initializeApp } from 'firebase/app'
 import { connectAuthEmulator, getAuth, GoogleAuthProvider } from 'firebase/auth'
 import { getDatabase } from 'firebase/database'
 import { connectDatabaseEmulator } from 'firebase/database'
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
+import { firebaseConfig } from './firebaseConfig'
 
-const config = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-}
+const config = firebaseConfig
 
-export const firebaseConfigured = Object.values(config).every(Boolean)
+export const firebaseConfigured = Boolean(
+  config.apiKey &&
+    config.authDomain &&
+    config.databaseURL &&
+    config.projectId &&
+    config.messagingSenderId &&
+    config.appId,
+)
 export const firebaseApp = firebaseConfigured ? (getApps()[0] ?? initializeApp(config)) : null
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null
 export const firebaseDatabase = firebaseApp ? getDatabase(firebaseApp) : null
