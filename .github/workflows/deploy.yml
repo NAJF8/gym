@@ -35,6 +35,8 @@ jobs:
 
       - name: Build
         run: npm run build -- --base=/gym/
+        env:
+          VITE_MEMBER_PIN_API_URL: https://alasas-fit-member-auth.coffee101.workers.dev
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

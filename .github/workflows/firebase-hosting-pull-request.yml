@@ -19,6 +19,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build -- --base=/
+        env:
+          VITE_MEMBER_PIN_API_URL: https://alasas-fit-member-auth.coffee101.workers.dev
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

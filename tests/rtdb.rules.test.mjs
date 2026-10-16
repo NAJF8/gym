@@ -25,6 +25,7 @@ const nonGoogleContext = uid => env.authenticatedContext(uid, {
   email_verified: true,
   firebase: { sign_in_provider: 'password' },
 })
+const memberContext = uid => env.authenticatedContext(uid, { member: true })
 const writePublicExercise = (db, exercise) => update(ref(db), Object.fromEntries(
   Object.entries(exercise).map(([field, value]) => [`publicExercises/${exercise.id}/${field}`, value]),
 ))
@@ -58,6 +59,13 @@ test('unauthenticated users cannot read admin data', async () => {
 })
 test('verified non-Google users cannot use admin data', async () => {
   await assertFails(get(ref(nonGoogleContext('manager').database(), 'appData')))
+})
+
+test('trusted member custom sessions are isolated and cannot write', async () => {
+  await assertSucceeds(get(ref(memberContext('memberA').database(), 'membersByUid/memberA')))
+  await assertFails(get(ref(memberContext('memberA').database(), 'membersByUid/memberB')))
+  await assertFails(update(ref(memberContext('memberA').database(), 'membersByUid/memberA'), { name: 'tampered' }))
+  await assertFails(get(ref(memberContext('inactiveMember').database(), 'membersByUid/inactiveMember')))
 })
 
 test('public exercise projection is readable without member data and writable only by active admins', async () => {

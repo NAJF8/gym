@@ -55,7 +55,7 @@
     },
     "membersByUid": {
       "$uid": {
-        ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && ((auth.uid === $uid && data.child('active').val() === true) || root.child('admins').child(auth.uid).child('active').val() === true)",
+        ".read": "auth != null && ((auth.uid === $uid && data.child('active').val() === true) || (auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true))",
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
       }
     }

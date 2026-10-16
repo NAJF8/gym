@@ -1,0 +1,22 @@
+{
+  "name": "al-asas-fit-member-auth-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy:staging": "wrangler deploy --config wrangler.staging.toml",
+    "migrate:staging": "wrangler d1 migrations apply alasas-fit-member-auth-staging --remote --config wrangler.staging.toml",
+    "deploy:production": "wrangler deploy --config wrangler.production.toml",
+    "migrate:production": "wrangler d1 migrations apply alasas-fit-member-auth --remote --config wrangler.production.toml"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261015.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.151.0"
+  }
+}

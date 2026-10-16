@@ -73,6 +73,7 @@ export async function writeAdminData<T>(payload: T) {
       id: member.id,
       membershipId: member.membershipId || member.id,
       name: member.name,
+      phone: member.phone || '',
       height: member.height || '',
       weight: member.weight || '',
       createdAt: member.createdAt || '',
