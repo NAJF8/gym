@@ -431,6 +431,7 @@ function Topbar({ title, onMenu }: { title: string; onMenu: () => void }) {
 }
 type AppPayload = SyncPayload<SettingsData, Exercise, Member, ReadyCourse>;
 function CentralDataBridge({
+  role,
   settings,
   exercises,
   members,
@@ -440,6 +441,7 @@ function CentralDataBridge({
   setMembers,
   setCourses,
 }: {
+  role: AdminRecord["role"];
   settings: SettingsData;
   exercises: Exercise[];
   members: Member[];
@@ -496,12 +498,10 @@ function CentralDataBridge({
         new CustomEvent("alasas-save-status", { detail: "saving" }),
       );
       try {
-        await writeAdminData(payload);
+        await writeAdminData(payload, { role });
         const check = await readAdminData<AppPayload>();
-        if (
-          !check ||
-          JSON.stringify(check.settings) !== JSON.stringify(remoteSettings)
-        )
+        if (!check || (role === "SUPER_ADMIN" &&
+          JSON.stringify(check.settings) !== JSON.stringify(remoteSettings)))
           throw new Error("تعذر تأكيد قراءة إعدادات Firebase بعد الحفظ");
         setRemotePresent(true);
         window.dispatchEvent(
@@ -519,7 +519,7 @@ function CentralDataBridge({
     };
     window.addEventListener("alasas-save-settings", save);
     return () => window.removeEventListener("alasas-save-settings", save);
-  }, [payload, busy, remoteSettings]);
+  }, [payload, busy, remoteSettings, role]);
   const migrate = async () => {
     setBusy(true);
     setError("");
@@ -529,7 +529,7 @@ function CentralDataBridge({
       await writeAdminData({
         ...payload,
         migratedAt: new Date().toISOString(),
-      });
+      }, { role });
       setRemotePresent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "تعذر ترحيل البيانات");
@@ -639,6 +639,7 @@ function App({
             <Topbar title={title} onMenu={() => setOpen(true)} />
             <main className="content">
               <CentralDataBridge
+                role={role}
                 settings={settings}
                 exercises={exercises}
                 members={members}

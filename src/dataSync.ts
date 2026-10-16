@@ -68,7 +68,10 @@ export function watchMemberProfile<T>(
   });
 }
 
-export async function writeAdminData<T>(payload: T) {
+export async function writeAdminData<T>(
+  payload: T,
+  options: { role?: "SUPER_ADMIN" | "MANAGER" } = {},
+) {
   if (!firebaseDatabase) throw new Error("Firebase RTDB غير مهيأ");
   const publicExercises = Array.isArray(
     (payload as { exercises?: unknown }).exercises,
@@ -135,12 +138,16 @@ export async function writeAdminData<T>(payload: T) {
     migratedAt?: unknown;
   };
   const safePayload = stripUndefined({
-    schemaVersion: appData.schemaVersion,
-    settings: appData.settings,
+    ...(options.role === "SUPER_ADMIN"
+      ? {
+          schemaVersion: appData.schemaVersion,
+          settings: appData.settings,
+          ...(appData.migratedAt ? { migratedAt: appData.migratedAt } : {}),
+        }
+      : {}),
     exercises: appData.exercises,
     members: appData.members,
     courses: appData.courses,
-    ...(appData.migratedAt ? { migratedAt: appData.migratedAt } : {}),
   });
   const updates: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(safePayload as Record<string, unknown>)) {
