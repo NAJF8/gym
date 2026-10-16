@@ -222,10 +222,10 @@ export default {
     try {
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
-      if (url.pathname === "/api/admin/members/pin") return await issuePin(env, request);
-      if (url.pathname === "/api/member/login") return await memberLogin(env, request);
-      if (url.pathname === "/api/member/me") return await memberMe(env, request);
-      if (url.pathname === "/api/member/logout") return await memberLogout(env, request);
+      if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
+      if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
+      if (url.pathname === "/v1/member/me") return await memberMe(env, request);
+      if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
       return json({ error: "Not found" }, 404, headers);
     } catch (error) {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";

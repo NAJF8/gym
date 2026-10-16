@@ -13,10 +13,9 @@ export type MemberPinProfile = {
   phone?: string
 }
 
-// Production already has an approved Worker contract under /v1/*.
+// The Worker contract is versioned and identical across environments.
 // Local builds stay fail-closed unless an endpoint is explicitly supplied.
 const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || (import.meta.env.PROD ? 'https://alasas-fit-member-auth.coffee101.workers.dev' : '')).replace(/\/+$/, '')
-const apiVersion = String(import.meta.env.VITE_PIN_SERVICE_API_VERSION || (import.meta.env.PROD ? 'v1' : 'api'))
 export const pinServiceConfigured = /^https:\/\//i.test(endpoint) || /^http:\/\/localhost(?::\d+)?$/i.test(endpoint)
 
 function requireEndpoint() {
@@ -38,7 +37,7 @@ export async function issueMemberPin(memberId: string, phone: string, membership
   if (!firebaseAuth?.currentUser) throw new Error('يجب تسجيل دخول مدير Google موثّق')
   if (!phone.trim()) throw new Error('أدخل رقم هاتف المشترك أولاً')
   const token = await firebaseAuth.currentUser.getIdToken()
-  const result = await request<{ pin: string }>('/' + (apiVersion === 'v1' ? 'v1/admin/member-pin' : 'api/admin/members/pin'), {
+  const result = await request<{ pin: string }>('/v1/admin/member-pin', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ memberId, membershipId, phone, reset }),
@@ -49,7 +48,7 @@ export async function issueMemberPin(memberId: string, phone: string, membership
 
 export async function loginMemberWithPin(phone: string, pin: string) {
   if (!/^\d{4}$/.test(pin)) throw new Error('PIN يجب أن يتكون من 4 أرقام')
-  const result = await request<{ member?: MemberPinProfile; sessionToken?: string; customToken?: string }>('/' + (apiVersion === 'v1' ? 'v1/member/login' : 'api/member/login'), {
+  const result = await request<{ member?: MemberPinProfile; sessionToken?: string; customToken?: string }>('/v1/member/login', {
     method: 'POST',
     body: JSON.stringify({ phone, pin }),
   })
@@ -60,7 +59,7 @@ export async function loginMemberWithPin(phone: string, pin: string) {
 
 export async function revokeMemberSession(sessionToken: string) {
   if (!sessionToken) return
-  await request('/api/member/logout', {
+  await request('/v1/member/logout', {
     method: 'POST',
     headers: { authorization: `Bearer ${sessionToken}` },
   })

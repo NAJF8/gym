@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:production",
+    "build:production": "tsc -b && vite build --mode production",
+    "build:staging": "tsc -b && vite build --mode staging",
+    "build:pages": "tsc -b && vite build --mode pages",
     "preview": "vite preview",
     "test": "npm run test:rules && npm run test:video && npm run test:pin",
     "test:video": "node --experimental-strip-types --test tests/video-url.test.mjs",
