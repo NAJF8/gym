@@ -1,6 +1,8 @@
 name: AL ASAS FIT Staging - Firebase Hosting
 
 on:
+  push:
+    branches: [codex/al-asas-fit-pin-staging-20261016]
   workflow_dispatch:
 
 permissions:
