@@ -47,12 +47,24 @@ import {
 import {
   issueMemberPin,
   loginMemberWithPin,
+  revokeMemberSession,
   pinServiceConfigured,
 } from "./memberPin";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
 import "./styles.css";
 
-function MemberPinGate(){const[member,setMember]=useState<Member|null>(null);const[busy,setBusy]=useState(false);const[error,setError]=useState('');const[phone,setPhone]=useState('');const[pin,setPin]=useState('');if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;if(!member)return <main className="auth-page"><Logo s={defaults}/><section className="panel auth-card"><span className="status">● تسجيل المشترك: هاتف + PIN</span><h1>بوابة المشترك</h1><p>أدخل رقم الهاتف والرمز الرباعي الذي أصدره المدرب. الرمز لا يُخزّن في المتصفح أو Firebase.</p><label>رقم الهاتف<input inputMode="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)}/></label><label>PIN من 4 أرقام<input inputMode="numeric" autoComplete="one-time-code" maxLength={4} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,4))}/></label><Button onClick={async()=>{setBusy(true);setError('');try{setMember(await loginMemberWithPin(phone,pin) as Member)}catch(e){setError(e instanceof Error?e.message:'تعذر تسجيل الدخول')}finally{setBusy(false)}}}>{busy?'جارٍ التحقق…':'تسجيل الدخول'}</Button>{error&&<p className="auth-error" role="alert">{error}</p>}<p className="auth-help">Google مخصص للمدراء فقط. لا تحاول اختيار عضوية أو رقم هاتف آخر من الواجهة.</p></section></main>;return <MemberPortal s={defaults} member={member} onSignOut={()=>setMember(null)}/>}
+function MemberPinGate(){
+  const [member,setMember]=useState<Member|null>(null);
+  const [sessionToken,setSessionToken]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const [phone,setPhone]=useState('');
+  const [pin,setPin]=useState('');
+  const signOut=async()=>{const token=sessionToken;setSessionToken('');setMember(null);try{await revokeMemberSession(token)}catch{}}
+  if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;
+  if(!member)return <main className="auth-page"><Logo s={defaults}/><section className="panel auth-card"><span className="status">● تسجيل المشترك: هاتف + PIN</span><h1>بوابة المشترك</h1><p>أدخل رقم الهاتف والرمز الرباعي الذي أصدره المدرب. الرمز لا يُخزّن في المتصفح أو Firebase.</p><label>رقم الهاتف<input inputMode="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)}/></label><label>PIN من 4 أرقام<input inputMode="numeric" autoComplete="one-time-code" maxLength={4} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,4))}/></label><Button onClick={async()=>{setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);setMember(result.member as Member);setSessionToken(result.sessionToken)}catch(e){setError(e instanceof Error?e.message:'تعذر تسجيل الدخول')}finally{setBusy(false)}}}>{busy?'جارٍ التحقق…':'تسجيل الدخول'}</Button>{error&&<p className="auth-error" role="alert">{error}</p>}<p className="auth-help">Google مخصص للمدراء فقط. لا تحاول اختيار عضوية أو رقم هاتف آخر من الواجهة.</p></section></main>;
+  return <MemberPortal s={defaults} member={member} onSignOut={signOut}/>;
+}
 type Exercise = {
   id: string;
   name: string;

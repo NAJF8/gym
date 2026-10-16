@@ -46,10 +46,19 @@ export async function issueMemberPin(memberId: string, phone: string) {
 
 export async function loginMemberWithPin(phone: string, pin: string) {
   if (!/^\d{4}$/.test(pin)) throw new Error('PIN يجب أن يتكون من 4 أرقام')
-  const result = await request<{ member: MemberPinProfile }>('/api/member/login', {
+  const result = await request<{ member: MemberPinProfile; sessionToken: string }>('/api/member/login', {
     method: 'POST',
     body: JSON.stringify({ phone, pin }),
   })
   if (!result.member || result.member.active === false) throw new Error('العضوية غير فعالة')
-  return result.member
+  if (!result.sessionToken) throw new Error('جلسة المشترك غير صالحة')
+  return result
+}
+
+export async function revokeMemberSession(sessionToken: string) {
+  if (!sessionToken) return
+  await request('/api/member/logout', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${sessionToken}` },
+  })
 }
