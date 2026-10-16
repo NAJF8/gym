@@ -142,15 +142,12 @@ export async function writeAdminData<T>(payload: T) {
     courses: appData.courses,
     ...(appData.migratedAt ? { migratedAt: appData.migratedAt } : {}),
   });
+  const updates: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(safePayload as Record<string, unknown>)) {
+    if (value !== undefined) updates[`appData/${key}`] = value;
+  }
   await update(ref(firebaseDatabase), {
-    "appData/schemaVersion": safePayload.schemaVersion,
-    "appData/settings": safePayload.settings,
-    "appData/exercises": safePayload.exercises,
-    "appData/members": safePayload.members,
-    "appData/courses": safePayload.courses,
-    ...(safePayload.migratedAt
-      ? { "appData/migratedAt": safePayload.migratedAt }
-      : {}),
+    ...updates,
     ...(publicExercises ? { publicExercises } : {}),
     ...memberUpdates,
   });
