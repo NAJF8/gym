@@ -23,6 +23,16 @@ function requireEndpoint() {
   return endpoint
 }
 
+async function requireFreshAdminToken() {
+  if (!firebaseAuth) throw new Error('Firebase غير مهيأ')
+  await firebaseAuth.authStateReady()
+  const user = firebaseAuth.currentUser
+  if (!user) throw new Error('يجب تسجيل دخول مدير Google موثّق')
+  const token = await user.getIdToken(true)
+  if (!token) throw new Error('تعذر الحصول على توكن Firebase صالح')
+  return token
+}
+
 async function request<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(`${requireEndpoint()}${path}`, {
     ...init,
@@ -34,9 +44,8 @@ async function request<T>(path: string, init: RequestInit = {}) {
 }
 
 export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = true) {
-  if (!firebaseAuth?.currentUser) throw new Error('يجب تسجيل دخول مدير Google موثّق')
   if (!phone.trim()) throw new Error('أدخل رقم هاتف المشترك أولاً')
-  const token = await firebaseAuth.currentUser.getIdToken()
+  const token = await requireFreshAdminToken()
   const result = await request<{ pin: string }>('/v1/admin/member-pin', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
