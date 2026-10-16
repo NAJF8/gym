@@ -119,6 +119,40 @@ const muscles = [
   "تمارين السمانة",
   "تمارين الكارديو",
 ];
+const muscleAliases: Record<string, string> = {
+  chest: muscles[0],
+  صدر: muscles[0],
+  back: muscles[1],
+  ظهر: muscles[1],
+  legs: muscles[2],
+  leg: muscles[2],
+  أرجل: muscles[2],
+  shoulders: muscles[3],
+  shoulder: muscles[3],
+  أكتاف: muscles[3],
+  biceps: muscles[4],
+  بايسبس: muscles[4],
+  triceps: muscles[5],
+  ترايسبس: muscles[5],
+  abs: muscles[6],
+  abdomen: muscles[6],
+  بطن: muscles[6],
+  forearms: muscles[7],
+  forearm: muscles[7],
+  سواعد: muscles[7],
+  calves: muscles[8],
+  calf: muscles[8],
+  سمانة: muscles[8],
+  cardio: muscles[9],
+  كارديو: muscles[9],
+};
+function normalizeMuscle(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return muscleAliases[raw.toLowerCase()] || raw;
+}
+function normalizeExercise(exercise: Exercise): Exercise {
+  return { ...exercise, muscle: normalizeMuscle(exercise.muscle) };
+}
 const seedExercises: Exercise[] = [
   {
     id: "bench-press",
@@ -442,7 +476,9 @@ function CentralDataBridge({
         if (remote) {
           hydrating.current = true;
           setSettings(remote.settings || defaults);
-          setExercises(dedupeById(remote.exercises || []));
+          setExercises(
+            dedupeById((remote.exercises || []).map(normalizeExercise)),
+          );
           setMembers(dedupeById(remote.members || []));
           setCourses(dedupeById(remote.courses || []));
           setRemotePresent(true);
@@ -534,7 +570,7 @@ function App({
     read("alasas-settings", defaults),
   );
   const [exercises, setExercises] = useState(() =>
-    read<Exercise[]>("alasas-exercises", seedExercises),
+    read<Exercise[]>("alasas-exercises", seedExercises).map(normalizeExercise),
   );
   const [members, setMembers] = useState(() =>
     read<Member[]>("alasas-members", []),
@@ -1439,7 +1475,7 @@ function Picker({
         </div>
         <div className="picker-exercises">
           {exercises
-            .filter((e) => e.muscle === muscle)
+            .filter((e) => normalizeMuscle(e.muscle) === muscle)
             .map((e) => (
               <button
                 disabled={disabled}
@@ -1458,7 +1494,7 @@ function Picker({
                 </span>
                 <b>{e.name}</b>
                 <small>
-                  {e.sets} × {e.reps}
+                  {e.sets} × {e.reps} · راحة {e.rest} · {safeVideoUrl(e.video) ? "رابط شرح" : "QR عند الطباعة"}
                 </small>
               </button>
             ))}
@@ -1468,7 +1504,12 @@ function Picker({
         <div className="selected-exercises">
           {selected[day].map((e) => (
             <div key={e.id}>
-              <b>{e.name}</b>
+              <div>
+                <b>{e.name}</b>
+                <small>
+                  {e.sets} × {e.reps} · راحة {e.rest} · {safeVideoUrl(e.video) ? "رابط شرح" : "QR عند الطباعة"}
+                </small>
+              </div>
               <label>
                 مجموعات
                 <input
