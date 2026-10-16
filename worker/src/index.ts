@@ -6,14 +6,21 @@ interface Env {
   FIREBASE_WEB_API_KEY: string;
   FIREBASE_SERVICE_ACCOUNT_EMAIL: string;
   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY: string;
-  CORS_ORIGIN: string;
+  CORS_ORIGIN?: string;
+  CORS_ORIGINS?: string;
 }
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", ...headers } });
 
-function cors(env: Env) {
-  return { "access-control-allow-origin": env.CORS_ORIGIN, "access-control-allow-headers": "content-type, authorization", "access-control-allow-methods": "POST, OPTIONS", vary: "Origin" };
+function allowedOrigins(env: Env) {
+  return (env.CORS_ORIGINS || env.CORS_ORIGIN || "").split(",").map(origin => origin.trim()).filter(Boolean);
+}
+
+function cors(env: Env, requestOrigin = "") {
+  const origins = allowedOrigins(env);
+  const allowOrigin = requestOrigin && origins.includes(requestOrigin) ? requestOrigin : (origins[0] || "");
+  return { "access-control-allow-origin": allowOrigin, "access-control-allow-headers": "content-type, authorization", "access-control-allow-methods": "POST, OPTIONS", vary: "Origin" };
 }
 
 function encodeBase64Url(value: ArrayBuffer | string) {
@@ -164,53 +171,53 @@ async function issuePin(env: Env, request: Request) {
   const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
   const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
   await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at").bind(crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
-  return json({ pin }, 200, cors(env));
+  return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function memberLogin(env: Env, request: Request) {
   const body = await request.json() as { phone?: unknown; pin?: unknown };
-  if (!isPin(body.pin)) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env));
+  if (!isPin(body.pin)) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   let phone: string;
-  try { phone = normalizePhone(body.phone); } catch { return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env)); }
+  try { phone = normalizePhone(body.phone); } catch { return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || "")); }
   const row = await env.PIN_DB.prepare("SELECT * FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; pin_salt: unknown; pin_hash: unknown; failure_count: number; locked_until: number | null; status: string }>();
   const now = Date.now();
   const keys = [`account:${row?.member_id || `phone:${phone}`}`, `source:${requestSource(request)}`];
-  if (await rateLimited(env, keys, now)) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env));
+  if (await rateLimited(env, keys, now)) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
   if (!row) {
     await recordRateFailure(env, [`source:${requestSource(request)}`], now);
-    return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env));
+    return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   }
-  if (row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env));
+  if (row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
   const actual = await derivePin(body.pin, storedBytes(row.pin_salt));
   if (!constantTimeEqual(actual, storedBytes(row.pin_hash))) {
     const attempts = row.failure_count + 1;
     await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = ?, locked_until = ?, updated_at = ? WHERE member_id = ?").bind(attempts, attempts >= 5 ? now + 15 * 60_000 : null, new Date(now).toISOString(), row.member_id).run();
     await recordRateFailure(env, keys, now);
-    return json({ error: "بيانات الدخول غير صحيحة" }, attempts >= 5 ? 429 : 401, cors(env));
+    return json({ error: "بيانات الدخول غير صحيحة" }, attempts >= 5 ? 429 : 401, cors(env, request.headers.get("origin") || ""));
   }
   const { member, appData } = await readMember(env, row.member_id);
-  if (member.active === false) return json({ error: "العضوية غير فعالة" }, 403, cors(env));
+  if (member.active === false) return json({ error: "العضوية غير فعالة" }, 403, cors(env, request.headers.get("origin") || ""));
   await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), new Date(now).toISOString(), row.member_id).run();
   await clearAccountRateFailure(env, row.member_id, now);
-  return json({ member: publicMember(member, appData), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env));
+  return json({ member: publicMember(member, appData), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function memberMe(env: Env, request: Request) {
   const { member, appData } = await sessionMember(env, request);
-  return json({ member: publicMember(member, appData) }, 200, cors(env));
+  return json({ member: publicMember(member, appData) }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function memberLogout(env: Env, request: Request) {
   const token = bearerToken(request);
   if (token) await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL").bind(Date.now(), await tokenHash(token)).run();
-  return json({ ok: true }, 200, cors(env));
+  return json({ ok: true }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 export default {
   async fetch(request: Request, env: Env) {
-    const headers = cors(env);
-    const origin = request.headers.get("origin");
-    if (origin && origin !== env.CORS_ORIGIN) return json({ error: "CORS_ORIGIN_DENIED" }, 403);
+    const origin = request.headers.get("origin") || "";
+    const headers = cors(env, origin);
+    if (origin && !allowedOrigins(env).includes(origin)) return json({ error: "CORS_ORIGIN_DENIED" }, 403, headers);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     try {
       const url = new URL(request.url);

@@ -12,7 +12,8 @@ Required Worker secrets/variables:
 - FIREBASE_WEB_API_KEY
 - FIREBASE_SERVICE_ACCOUNT_EMAIL
 - FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
-- CORS_ORIGIN
+- CORS_ORIGINS (comma-separated exact origins; `CORS_ORIGIN` remains the
+  single-origin fallback). Never use `*`.
 - D1 binding PIN_DB using the existing `member_credentials` and
   `pin_attempt_buckets` tables documented in schema.sql. Do not run schema.sql
   against an existing database.
