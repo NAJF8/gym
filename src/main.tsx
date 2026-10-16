@@ -1527,6 +1527,14 @@ function Picker({
                 />
               </label>
               <label>
+                الراحة
+                <input
+                  disabled={disabled}
+                  value={e.rest}
+                  onChange={(x) => update(e.id, "rest", x.target.value)}
+                />
+              </label>
+              <label>
                 الوزن
                 <input
                   disabled={disabled}
