@@ -1,4 +1,6 @@
-const PBKDF2_ITERATIONS = 210_000;
+// Cloudflare Workers WebCrypto currently caps PBKDF2 iterations at 100,000.
+// Staging credentials already use this value; keep the algorithm and salt format unchanged.
+const PBKDF2_ITERATIONS = 100_000;
 const HASH_BYTES = 32;
 
 export function normalizePhone(value: unknown) {

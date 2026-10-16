@@ -31,7 +31,7 @@ function pemToBytes(pem: string) {
 async function serviceAccessToken(env: Env) {
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = encodeBase64Url(JSON.stringify({ iss: env.FIREBASE_SERVICE_ACCOUNT_EMAIL, scope: "https://www.googleapis.com/auth/firebase.database", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
+  const claim = encodeBase64Url(JSON.stringify({ iss: env.FIREBASE_SERVICE_ACCOUNT_EMAIL, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
   const key = await crypto.subtle.importKey("pkcs8", pemToBytes(env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(header + "." + claim));
   const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
@@ -42,7 +42,14 @@ async function serviceAccessToken(env: Env) {
 }
 
 async function firebaseGet(env: Env, path: string, accessToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json?access_token=" + encodeURIComponent(accessToken);
+  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) throw new Error("Firebase read failed");
+  return response.json();
+}
+
+async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
+  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json?auth=" + encodeURIComponent(idToken);
   const response = await fetch(url);
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
@@ -56,22 +63,34 @@ async function verifyAdmin(env: Env, request: Request) {
   const account = await lookup.json() as { users?: Array<{ localId?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
   const user = account.users?.[0];
   if (!user?.localId || user.emailVerified !== true || !user.providerUserInfo?.some(item => item.providerId === "google.com")) throw new Error("ADMIN_REQUIRED");
-  const record = await firebaseGet(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean } | null;
+  const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean } | null;
   if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) throw new Error("ADMIN_REQUIRED");
   return user.localId;
 }
 
 async function readMember(env: Env, memberId: string) {
   const token = await serviceAccessToken(env);
-  const appData = await firebaseGet(env, "appData", token) as { members?: Array<Record<string, unknown>> } | null;
+  const appData = await firebaseGet(env, "appData", token) as { members?: Array<Record<string, unknown>>; courses?: Array<Record<string, unknown>>; exercises?: Array<Record<string, unknown>> } | null;
   const member = appData?.members?.find(item => item.id === memberId);
   if (!member) throw new Error("MEMBER_NOT_FOUND");
-  return { member, token };
+  return { member, appData, token };
 }
 
-function publicMember(member: Record<string, unknown>) {
+function publicMember(member: Record<string, unknown>, appData?: { courses?: Array<Record<string, unknown>>; exercises?: Array<Record<string, unknown>> }) {
   const safe = { ...member };
   delete safe.authUid;
+  const rawDays = safe.days;
+  if (Array.isArray(rawDays) && appData && rawDays.every(day => typeof day === "string")) {
+    const courses = Array.isArray(appData.courses) ? appData.courses : [];
+    const exercises = Array.isArray(appData.exercises) ? appData.exercises : [];
+    safe.days = rawDays.flatMap(courseId => {
+      const course = courses.find(item => item.id === courseId && Array.isArray(item.memberIds) && item.memberIds.includes(member.id));
+      if (!course) return [];
+      if (Array.isArray(course.days)) return course.days;
+      if (!Array.isArray(course.exercises)) return [];
+      return [course.exercises.map(exerciseId => exercises.find(item => item.id === exerciseId)).filter(Boolean)];
+    });
+  }
   return safe;
 }
 
@@ -127,9 +146,9 @@ async function sessionMember(env: Env, request: Request) {
   const now = Date.now();
   if (!row || row.revoked_at !== null || row.expires_at <= now) throw new Error("SESSION_INVALID");
   await env.PIN_DB.prepare("UPDATE member_sessions SET last_seen_at = ? WHERE session_id = ?").bind(now, row.session_id).run();
-  const { member } = await readMember(env, row.member_id);
+  const { member, appData } = await readMember(env, row.member_id);
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
-  return { member, sessionId: row.session_id };
+  return { member, appData, sessionId: row.session_id };
 }
 
 async function issuePin(env: Env, request: Request) {
@@ -169,16 +188,16 @@ async function memberLogin(env: Env, request: Request) {
     await recordRateFailure(env, keys, now);
     return json({ error: "بيانات الدخول غير صحيحة" }, attempts >= 5 ? 429 : 401, cors(env));
   }
-  const { member } = await readMember(env, row.member_id);
+  const { member, appData } = await readMember(env, row.member_id);
   if (member.active === false) return json({ error: "العضوية غير فعالة" }, 403, cors(env));
   await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), new Date(now).toISOString(), row.member_id).run();
   await clearAccountRateFailure(env, row.member_id, now);
-  return json({ member: publicMember(member), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env));
+  return json({ member: publicMember(member, appData), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env));
 }
 
 async function memberMe(env: Env, request: Request) {
-  const { member } = await sessionMember(env, request);
-  return json({ member: publicMember(member) }, 200, cors(env));
+  const { member, appData } = await sessionMember(env, request);
+  return json({ member: publicMember(member, appData) }, 200, cors(env));
 }
 
 async function memberLogout(env: Env, request: Request) {
