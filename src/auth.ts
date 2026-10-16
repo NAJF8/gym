@@ -28,12 +28,6 @@ export async function signInAdmin() {
   return signInWithPopup(firebaseAuth, googleProvider)
 }
 
-/** Google authentication is shared; authorization remains route-specific in RTDB rules. */
-export async function signInMember() {
-  if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
-  return signInWithPopup(firebaseAuth, googleProvider)
-}
-
 export async function signInMemberWithPin(phone: string, pin: string) {
   if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف إعدادات VITE_FIREBASE_* قبل تسجيل الدخول.')
   if (!memberPinApiUrl) throw new Error('تسجيل الهاتف + PIN غير مفعّل: لم يتم ضبط خدمة التحقق الموثوقة.')
@@ -64,6 +58,18 @@ export async function issueMemberPin(input: { phone: string; membershipId: strin
   const payload = await response.json() as { pin?: unknown }
   if (typeof payload.pin !== 'string' || !validateMemberPin(payload.pin)) throw new Error('استجابة إصدار PIN غير صالحة')
   return payload.pin
+}
+
+export async function setMemberLoginEnabled(memberId: string, enabled: boolean) {
+  if (!memberPinApiUrl) throw new Error('إدارة دخول الهاتف غير مفعّلة: لم يتم ضبط خدمة التحقق الموثوقة.')
+  if (!firebaseAuth?.currentUser) throw new Error('يجب تسجيل دخول المدير أولاً')
+  const token = await firebaseAuth.currentUser.getIdToken()
+  const response = await fetch(`${memberPinApiUrl}/v1/admin/member-disable`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ memberId, enabled }),
+  })
+  if (!response.ok) throw new Error('تعذر تغيير حالة دخول المشترك')
 }
 
 export async function signOutUser() {
