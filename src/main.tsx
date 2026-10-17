@@ -38,8 +38,10 @@ import { firebaseConfigured } from "./firebase";
 import {
   backupLocalSnapshot,
   dedupeById,
+  firebaseSyncError,
   readMemberProfile,
   readAdminData,
+  readAdminExercises,
   type SyncPayload,
   watchAdminData,
   watchPublicExercise,
@@ -457,6 +459,7 @@ function CentralDataBridge({
   const [error, setError] = useState("");
   const [backupKey, setBackupKey] = useState("");
   const hydrating = useRef(true);
+  const lastRemote = useRef<AppPayload | null>(null);
   const localPayload: AppPayload = {
     schemaVersion: 1,
     settings,
@@ -476,6 +479,7 @@ function CentralDataBridge({
     () =>
       watchAdminData<AppPayload>((remote) => {
         if (remote) {
+          lastRemote.current = remote;
           hydrating.current = true;
           setSettings(remote.settings || defaults);
           setExercises(
@@ -492,23 +496,89 @@ function CentralDataBridge({
   useEffect(() => {
     const save = async () => {
       if (busy) return;
+      const previousForSave = lastRemote.current;
+      const previousExercises = Array.isArray(previousForSave?.exercises)
+        ? previousForSave.exercises
+        : [];
+      const changedExercises = payload.exercises.filter((exercise) => {
+        const old = previousExercises.find((item) => item.id === exercise.id);
+        return !old || JSON.stringify(old) !== JSON.stringify(exercise);
+      });
       setBusy(true);
       setError("");
       window.dispatchEvent(
         new CustomEvent("alasas-save-status", { detail: "saving" }),
       );
       try {
-        await writeAdminData(payload, { role });
+        await writeAdminData(payload, { role, previous: previousForSave });
+        console.info("[firebase-save]", { phase: "update", result: "ok" });
         const check = await readAdminData<AppPayload>();
-        if (!check || (role === "SUPER_ADMIN" &&
-          JSON.stringify(check.settings) !== JSON.stringify(remoteSettings)))
-          throw new Error("تعذر تأكيد قراءة إعدادات Firebase بعد الحفظ");
+        console.info("[firebase-save]", {
+          phase: "read",
+          result: check ? "ok" : "empty",
+        });
+        if (!check)
+          throw firebaseSyncError(
+            "verify",
+            "NOT_FOUND",
+            "تعذر تأكيد قراءة إعدادات Firebase بعد الحفظ",
+          );
+        if (
+          role === "SUPER_ADMIN" &&
+          JSON.stringify(check.settings) !== JSON.stringify(remoteSettings)
+        )
+          throw firebaseSyncError(
+            "verify",
+            "SETTINGS_MISMATCH",
+            "تعذر تأكيد قراءة إعدادات Firebase بعد الحفظ",
+          );
+        if (changedExercises.length) {
+          const remoteExercises = await readAdminExercises<Exercise[]>();
+          const remoteById = new Map(
+            (Array.isArray(remoteExercises) ? remoteExercises : [])
+              .filter((exercise) => exercise && typeof exercise.id === "string")
+              .map((exercise) => [exercise.id, exercise]),
+          );
+          const missingId = changedExercises.find(
+            (exercise) => !remoteById.has(exercise.id),
+          );
+          if (missingId)
+            throw firebaseSyncError(
+              "verify",
+              "EXERCISE_MISSING",
+              "تعذر تأكيد حفظ التمرين في Firebase RTDB",
+            );
+          const mismatched = changedExercises.find(
+            (exercise) =>
+              JSON.stringify(remoteById.get(exercise.id)) !==
+              JSON.stringify(exercise),
+          );
+          if (mismatched)
+            throw firebaseSyncError(
+              "verify",
+              "EXERCISE_MISMATCH",
+              "تعذر تأكيد محتوى التمرين في Firebase RTDB",
+            );
+        }
         setRemotePresent(true);
+        lastRemote.current = payload;
         window.dispatchEvent(
           new CustomEvent("alasas-save-status", { detail: "saved" }),
         );
       } catch (e) {
-        const message = e instanceof Error ? e.message : "تعذر حفظ RTDB";
+        const syncError = e instanceof Error && "phase" in e && "code" in e
+          ? (e as Error & { phase: string; code: string })
+          : null;
+        if (syncError)
+          console.warn("[firebase-save]", {
+            phase: syncError.phase,
+            code: syncError.code,
+          });
+        const message = syncError
+          ? `${syncError.message} [${syncError.phase}/${syncError.code}]`
+          : e instanceof Error
+            ? e.message
+            : "تعذر حفظ RTDB";
         setError(message);
         window.dispatchEvent(
           new CustomEvent("alasas-save-status", { detail: message }),
@@ -529,7 +599,7 @@ function CentralDataBridge({
       await writeAdminData({
         ...payload,
         migratedAt: new Date().toISOString(),
-      }, { role });
+      }, { role, previous: lastRemote.current });
       setRemotePresent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "تعذر ترحيل البيانات");

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing'
-import { get, ref, set } from 'firebase/database'
+import { get, ref, set, update } from 'firebase/database'
 
 const rules = await readFile(new URL('../database.rules.json', import.meta.url), 'utf8')
 const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'gym1-4f1bb'
@@ -78,6 +78,28 @@ test('public exercise video validation rejects unsafe, encoded, spaced, and unap
   ]) await assertFails(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: '' }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: 'https://www.youtube.com/watch?v=safe' }))
+})
+
+test('authorized multi-location exercise write is readable back by id', async () => {
+  const db = verifiedContext('manager').database()
+  const id = 'staging-back-20261017-b'
+  const exercise = {
+    id,
+    name: 'اختبار ظهر 20261017 B',
+    muscle: 'تمارين الظهر',
+    sets: 3,
+    reps: '10–12',
+    rest: '60 ثانية',
+    video: '',
+  }
+  await assertSucceeds(update(ref(db), {
+    [`appData/exercises/0`]: exercise,
+    [`publicExercises/${id}`]: exercise,
+  }))
+  const appDataExercise = await assertSucceeds(get(ref(db, 'appData/exercises/0')))
+  const publicExercise = await assertSucceeds(get(ref(db, `publicExercises/${id}`)))
+  assert.equal(appDataExercise.val().id, id)
+  assert.equal(publicExercise.val().id, id)
 })
 
 test('manager can use appData but cannot modify admin roles', async () => {
