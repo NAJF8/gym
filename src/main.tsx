@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef, useState } from "react";
+import { Component, StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -271,8 +271,45 @@ const read = <T,>(key: string, fallback: T): T => {
   }
 };
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const cloneDays = (days: DayPlan[]) =>
-  days.map((day) => day.map((ex) => ({ ...ex })));
+const cloneDays = (days: unknown): DayPlan[] =>
+  (Array.isArray(days) ? days : []).map((day) =>
+    Array.isArray(day)
+      ? day
+          .filter((exercise): exercise is Record<string, unknown> => Boolean(exercise && typeof exercise === "object"))
+          .map((exercise) => ({
+            ...exercise,
+            id: String(exercise.id ?? uid()),
+            name: String(exercise.name ?? "تمرين بدون اسم"),
+            muscle: normalizeMuscle(exercise.muscle),
+            sets: typeof exercise.sets === "number" || typeof exercise.sets === "string" ? exercise.sets : 0,
+            reps: String(exercise.reps ?? "—"),
+            rest: String(exercise.rest ?? "—"),
+          } as MemberExercise))
+      : [],
+  );
+function normalizeMember(value: unknown): Member | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const id = String(raw.id ?? "").trim();
+  if (!id) return null;
+  return {
+    id,
+    membershipId: raw.membershipId == null ? undefined : String(raw.membershipId),
+    name: String(raw.name ?? "مشترك بدون اسم"),
+    height: String(raw.height ?? ""),
+    weight: String(raw.weight ?? ""),
+    createdAt: String(raw.createdAt ?? "—"),
+    photo: typeof raw.photo === "string" ? raw.photo : "",
+    days: cloneDays(raw.days),
+    active: raw.active !== false,
+    authUid: raw.authUid == null ? undefined : String(raw.authUid),
+    phone: raw.phone == null ? undefined : String(raw.phone),
+  };
+}
+function normalizeMembers(value: unknown): Member[] {
+  const items = Array.isArray(value) ? value : [];
+  return dedupeById(items.map(normalizeMember).filter((member): member is Member => Boolean(member)));
+}
 const blankDays = (count: number) =>
   Array.from({ length: count }, () => [] as DayPlan);
 type Page =
@@ -485,7 +522,7 @@ function CentralDataBridge({
           setExercises(
             dedupeById((remote.exercises || []).map(normalizeExercise)),
           );
-          setMembers(dedupeById(remote.members || []));
+          setMembers(normalizeMembers(remote.members));
           setCourses(dedupeById(remote.courses || []));
           setRemotePresent(true);
         }
@@ -643,7 +680,7 @@ function App({
     read<Exercise[]>("alasas-exercises", seedExercises).map(normalizeExercise),
   );
   const [members, setMembers] = useState(() =>
-    read<Member[]>("alasas-members", []),
+    normalizeMembers(read<unknown>("alasas-members", [])),
   );
   const [courses, setCourses] = useState(() =>
     read<ReadyCourse[]>("alasas-courses", []),
@@ -2548,7 +2585,7 @@ function printMember(m: Member, s: SettingsData) {
   w.document.close();
 }
 function escapeHtml(value: string) {
-  return value.replace(
+  return String(value ?? "").replace(
     /[&<>"']/g,
     (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
@@ -2556,15 +2593,55 @@ function escapeHtml(value: string) {
       ] || c,
   );
 }
+type UiErrorBoundaryState = { error: Error | null };
+class UiErrorBoundary extends Component<
+  { children: React.ReactNode },
+  UiErrorBoundaryState
+> {
+  state: UiErrorBoundaryState = { error: null };
+  static getDerivedStateFromError(error: Error): UiErrorBoundaryState {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("[ui-error-boundary]", {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      componentStack: info.componentStack,
+    });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <main className="error-boundary-page" dir="rtl">
+        <section className="panel error-boundary-card" role="alert">
+          <h1>تعذر عرض هذه الصفحة</h1>
+          <p>حدث خطأ غير متوقع في بيانات العرض. لم تُحذف أي بيانات.</p>
+          <small>يمكنك إعادة المحاولة أو العودة إلى لوحة الإدارة.</small>
+          <div className="error-boundary-actions">
+            <button className="primary-btn" onClick={() => window.location.reload()}>
+              إعادة المحاولة
+            </button>
+            <button className="secondary-btn" onClick={() => window.location.assign("/admin/") }>
+              العودة إلى لوحة الإدارة
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+}
 const adminRoute = location.pathname.replace(/\/+$/, "").endsWith("/admin");
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {adminRoute ? (
-      <AdminGate />
-    ) : location.hash.startsWith("#/exercise/") ? (
-      <App role="MANAGER" onSignOut={() => {}} />
-    ) : (
-      <MemberPinGate />
-    )}
+    <UiErrorBoundary>
+      {adminRoute ? (
+        <AdminGate />
+      ) : location.hash.startsWith("#/exercise/") ? (
+        <App role="MANAGER" onSignOut={() => {}} />
+      ) : (
+        <MemberPinGate />
+      )}
+    </UiErrorBoundary>
   </StrictMode>,
 );

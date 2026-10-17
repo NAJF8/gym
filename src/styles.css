@@ -86,3 +86,8 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .picker-exercises small,.selected-exercises small{line-height:1.5}
 .selected-exercises{max-height:24vh;overflow-y:auto;padding-left:4px}
 .selected-exercises>div{grid-template-columns:1.5fr repeat(4,85px)}
+.error-boundary-page{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg)}
+.error-boundary-card{max-width:560px;padding:28px;text-align:center}
+.error-boundary-card h1{font-size:22px;margin:0 0 10px}
+.error-boundary-card p,.error-boundary-card small{display:block;color:var(--muted);margin:8px 0}
+.error-boundary-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:20px}
