@@ -41,4 +41,3 @@ if (useEmulators && firebaseAuth && firebaseDatabase && firebaseFunctions) {
   connectDatabaseEmulator(firebaseDatabase, emulatorHost, databasePort)
   connectFunctionsEmulator(firebaseFunctions, emulatorHost, functionsPort)
 }
-

@@ -1,0 +1,30 @@
+[
+  {
+    "id": "squat",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/squat"
+  },
+  {
+    "id": "bench",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/bench"
+  },
+  {
+    "id": "row",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/row"
+  },
+  {
+    "id": "lunge",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/lunge"
+  },
+  {
+    "id": "curl",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/curl"
+  },
+  {
+    "id": "plank",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/plank"
+  },
+  {
+    "id": "stretch",
+    "target": "https://alasas-fit-staging.web.app/#/exercise/stretch"
+  }
+]
