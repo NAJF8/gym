@@ -8,6 +8,14 @@ interface Env {
   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY: string;
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
+  LOCAL_TEST_MODE?: string;
+  LOCAL_TEST_DIAGNOSTICS?: string;
+  LOCAL_TEST_ADMIN_UID?: string;
+  LOCAL_TEST_ADMIN_UIDS?: string;
+  LOCAL_TEST_DATABASE_NAMESPACE?: string;
+  LOCAL_TEST_SYNC_DELAY_MS?: string;
+  LOCAL_TEST_FAIL_RTDB_WRITE?: string;
+  LOCAL_TEST_DROP_AFTER_RTDB_WRITE?: string;
 }
 
 type MemberRecord = Record<string, unknown>;
@@ -26,6 +34,22 @@ function cors(env: Env, requestOrigin = "") {
   return { "access-control-allow-origin": allowOrigin, "access-control-allow-headers": "content-type, authorization", "access-control-allow-methods": "POST, OPTIONS", vary: "Origin" };
 }
 
+function firebaseUrl(env: Env, path: string) {
+  const base = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  if (env.LOCAL_TEST_MODE !== "true") return base;
+  const uid = env.LOCAL_TEST_ADMIN_UID || (env.LOCAL_TEST_ADMIN_UIDS || "").split(",").map(value => value.trim()).filter(Boolean)[0] || "local-admin";
+  const override = { uid, token: { email_verified: true, firebase: { sign_in_provider: "google.com" } } };
+  const namespace = env.LOCAL_TEST_DATABASE_NAMESPACE ? `&ns=${encodeURIComponent(env.LOCAL_TEST_DATABASE_NAMESPACE)}` : "";
+  return `${base}?auth_variable_override=${encodeURIComponent(JSON.stringify(override))}${namespace}`;
+}
+
+function firebaseOwnerUrl(env: Env, path: string) {
+  const base = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  return env.LOCAL_TEST_MODE === "true" && env.LOCAL_TEST_DATABASE_NAMESPACE
+    ? `${base}?ns=${encodeURIComponent(env.LOCAL_TEST_DATABASE_NAMESPACE)}`
+    : base;
+}
+
 function encodeBase64Url(value: ArrayBuffer | string) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
   let binary = "";
@@ -39,6 +63,7 @@ function pemToBytes(pem: string) {
 }
 
 async function serviceAccessToken(env: Env) {
+  if (env.LOCAL_TEST_MODE === "true") return "local-test";
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const claim = encodeBase64Url(JSON.stringify({ iss: env.FIREBASE_SERVICE_ACCOUNT_EMAIL, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
@@ -52,28 +77,30 @@ async function serviceAccessToken(env: Env) {
 }
 
 async function firebaseGet(env: Env, path: string, accessToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const url = firebaseUrl(env, path);
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
 }
 
 async function firebaseGetWithEtag(env: Env, path: string, accessToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const url = firebaseUrl(env, path);
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}`, "X-Firebase-ETag": "true" } });
   if (!response.ok) throw new Error("Firebase read failed");
   return { value: await response.json(), etag: response.headers.get("ETag") || "null_etag" };
 }
 
 async function firebasePutWithEtag(env: Env, path: string, value: unknown, accessToken: string, etag: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  if (env.LOCAL_TEST_MODE === "true" && env.LOCAL_TEST_FAIL_RTDB_WRITE === "true") throw new Error("INJECTED_RTDB_FAILURE");
+  const url = env.LOCAL_TEST_MODE === "true" ? firebaseOwnerUrl(env, path) : firebaseUrl(env, path);
   const response = await fetch(url, {
     method: "PUT",
-    headers: { authorization: `Bearer ${accessToken}`, "If-Match": etag, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${env.LOCAL_TEST_MODE === "true" ? "owner" : accessToken}`, "If-Match": etag, "content-type": "application/json" },
     body: JSON.stringify(value),
   });
   if (response.status === 412) throw new Error("RTDB_CONFLICT");
   if (!response.ok) throw new Error("Firebase write failed");
+  if (env.LOCAL_TEST_MODE === "true" && env.LOCAL_TEST_DROP_AFTER_RTDB_WRITE === "true") throw new Error("INJECTED_ACK_LOSS");
 }
 
 async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
@@ -86,6 +113,14 @@ async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
 async function verifyAdmin(env: Env, request: Request) {
   const idToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!idToken) throw new Error("AUTH_REQUIRED");
+  if (env.LOCAL_TEST_MODE === "true") {
+    const allowed = env.LOCAL_TEST_ADMIN_UID ? [env.LOCAL_TEST_ADMIN_UID] : (env.LOCAL_TEST_ADMIN_UIDS || "").split(",").map(value => value.trim()).filter(Boolean);
+    const uid = idToken.startsWith("local-admin:") ? idToken.slice("local-admin:".length) : "";
+    if (!uid || !allowed.includes(uid)) throw new Error("ADMIN_REQUIRED");
+    const record = await firebaseGet(env, "admins/" + encodeURIComponent(uid), "local-test") as { role?: string; active?: boolean } | null;
+    if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) throw new Error("ADMIN_REQUIRED");
+    return uid;
+  }
   const lookup = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
   if (!lookup.ok) throw new Error("AUTH_REQUIRED");
   const account = await lookup.json() as { users?: Array<{ localId?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
@@ -193,7 +228,7 @@ async function issuePin(env: Env, request: Request) {
   const now = Date.now();
   const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
   const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
-  await env.PIN_DB.prepare("INSERT INTO member_phone_reservations (phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, 'READY', ?, ?) ON CONFLICT(phone_e164) DO NOTHING").bind(phone, body.memberId, `legacy-pin-${body.memberId}-${phone}`, Date.now(), Date.now()).run();
+  await env.PIN_DB.prepare("INSERT OR IGNORE INTO member_phone_reservations (reservation_id, phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'READY', ?, ?)").bind(crypto.randomUUID(), phone, body.memberId, `legacy-pin-${body.memberId}-${phone}`, Date.now(), Date.now()).run();
   const reservation = await env.PIN_DB.prepare("SELECT member_id, state FROM member_phone_reservations WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; state: string }>();
   if (!reservation || reservation.member_id !== body.memberId || reservation.state !== "READY") throw new Error("MEMBER_SYNC_PENDING");
   const owner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string }>();
@@ -232,6 +267,20 @@ function memberPayload(value: unknown, memberId: string, operation: MemberOperat
   return { ...raw, id: memberId, name, ...(phone ? { phone } : {}), active: raw.active !== false };
 }
 
+function sameJson(left: unknown, right: unknown) {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.length ? value.map(canonical) : undefined;
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined && !(Array.isArray(item) && item.length === 0))
+        .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+        .map(([key, item]) => [key, canonical(item)]));
+    }
+    return value;
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
 async function findIdempotency(env: Env, key: string, actor: string, requestHash: string) {
   const row = await env.PIN_DB.prepare("SELECT actor_uid, request_hash, status, response_json FROM member_idempotency WHERE operation_key = ?").bind(key).first<{ actor_uid: string; request_hash: string; status: string; response_json: string | null }>();
   if (!row) return null;
@@ -243,17 +292,40 @@ async function findIdempotency(env: Env, key: string, actor: string, requestHash
 async function syncMemberOutbox(env: Env, operationKeyValue: string, memberId: string, operation: MemberOperation, payload: MemberRecord | null) {
   const token = await serviceAccessToken(env);
   const current = await firebaseGetWithEtag(env, "appData/members", token);
+  const delay = Number(env.LOCAL_TEST_SYNC_DELAY_MS || 0);
+  if (env.LOCAL_TEST_MODE === "true" && delay > 0) await new Promise(resolve => setTimeout(resolve, Math.min(delay, 5000)));
   const members = Array.isArray(current.value) ? [...current.value] as MemberRecord[] : [];
   const index = members.findIndex(item => item && item.id === memberId);
-  if (operation === "CREATE" && index >= 0) throw new Error("MEMBER_ALREADY_EXISTS");
+  if (operation === "CREATE" && index >= 0) {
+    if (sameJson(members[index], payload)) {
+      await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'SYNCED', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+      await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'READY', updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+      return;
+    }
+    throw new Error("MEMBER_ALREADY_EXISTS");
+  }
   if (operation === "UPDATE" && index < 0) throw new Error("MEMBER_NOT_FOUND");
-  if (operation === "DELETE" && index < 0) return;
+  if (operation === "UPDATE" && sameJson(members[index], payload)) {
+    await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'SYNCED', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+    await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'READY', updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+    return;
+  }
+  if (operation === "DELETE" && index < 0) {
+    await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'SYNCED', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+    await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'RELEASED', updated_at = ? WHERE member_id = ? AND state != 'RELEASED'").bind(Date.now(), memberId).run();
+    return;
+  }
   if (operation === "DELETE") members.splice(index, 1);
   else if (index < 0) members.push(payload as MemberRecord);
   else members[index] = payload as MemberRecord;
   await firebasePutWithEtag(env, "appData/members", members, token, current.etag);
   await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'SYNCED', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
-  await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = CASE WHEN ? = 'DELETE' THEN 'RELEASED' ELSE 'READY' END, updated_at = ? WHERE member_id = ?").bind(operation, Date.now(), memberId).run();
+  if (operation === "DELETE") {
+    await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'RELEASED', updated_at = ? WHERE member_id = ? AND state != 'RELEASED'").bind(Date.now(), memberId).run();
+  } else {
+    await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'READY', updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+    await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = 'RELEASED', updated_at = ? WHERE member_id = ? AND state = 'READY' AND operation_key != ? AND phone_e164 != COALESCE((SELECT phone_e164 FROM member_phone_reservations WHERE operation_key = ?), '')").bind(Date.now(), memberId, operationKeyValue, operationKeyValue).run();
+  }
 }
 
 async function memberOperation(env: Env, request: Request) {
@@ -274,22 +346,29 @@ async function memberOperation(env: Env, request: Request) {
 
   const now = Date.now();
   const phone = payload?.phone as string | undefined;
-  const existing = operation === "UPDATE" ? await env.PIN_DB.prepare("SELECT phone_e164 FROM member_phone_reservations WHERE member_id = ? AND state != 'RELEASED'").bind(memberId).first<{ phone_e164: string }>() : null;
+  const existing = operation === "UPDATE" ? await env.PIN_DB.prepare("SELECT phone_e164 FROM member_phone_reservations WHERE member_id = ? AND state != 'RELEASED' ORDER BY updated_at DESC LIMIT 1").bind(memberId).first<{ phone_e164: string }>() : null;
   const reservationPhone = phone || existing?.phone_e164;
   if (operation === "CREATE" && !reservationPhone) throw new Error("PHONE_REQUIRED");
+  const reservationOwner = reservationPhone ? await env.PIN_DB.prepare("SELECT member_id FROM member_phone_reservations WHERE phone_e164 = ? AND state != 'RELEASED'").bind(reservationPhone).first<{ member_id: string }>() : null;
+  if (operation === "CREATE" && reservationOwner) throw new Error("PHONE_CONFLICT");
+  if (reservationOwner && reservationOwner.member_id !== memberId) throw new Error("PHONE_CONFLICT");
   if (reservationPhone) {
-    const owner = await env.PIN_DB.prepare("SELECT member_id FROM member_phone_reservations WHERE phone_e164 = ?").bind(reservationPhone).first<{ member_id: string }>();
-    if (owner && owner.member_id !== memberId) throw new Error("PHONE_CONFLICT");
+    // An update that keeps the same phone reuses the existing reservation.
   }
   if (!replay) {
     await env.PIN_DB.prepare("INSERT OR IGNORE INTO member_idempotency (operation_key, actor_uid, request_hash, member_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'PENDING', ?, ?)").bind(key, actor, requestHash, memberId, now, now).run();
     const claimed = await findIdempotency(env, key, actor, requestHash);
     if (claimed && !claimed.pending) return json(claimed, 200, cors(env, request.headers.get("origin") || ""));
-    const reservationInsert = operation === "DELETE" || !reservationPhone ? null : env.PIN_DB.prepare("INSERT INTO member_phone_reservations (phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, 'PENDING_SYNC', ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164 = excluded.phone_e164, operation_key = excluded.operation_key, state = 'PENDING_SYNC', updated_at = excluded.updated_at").bind(reservationPhone, memberId, key, now, now);
+    const reservationInsert = operation === "DELETE" || !reservationPhone || reservationOwner ? null : env.PIN_DB.prepare("INSERT OR IGNORE INTO member_phone_reservations (reservation_id, phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'PENDING_SYNC', ?, ?)").bind(crypto.randomUUID(), reservationPhone, memberId, key, now, now);
     const outbox = env.PIN_DB.prepare("INSERT OR IGNORE INTO member_outbox (outbox_id, operation_key, member_id, operation, payload_json, state, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)").bind(crypto.randomUUID(), key, memberId, operation, JSON.stringify(payload), now, now);
     try {
       await env.PIN_DB.batch([...(reservationInsert ? [reservationInsert] : []), outbox]);
+      if (reservationInsert) {
+        const claimedReservation = await env.PIN_DB.prepare("SELECT member_id, phone_e164, state FROM member_phone_reservations WHERE operation_key = ?").bind(key).first<{ member_id: string; phone_e164: string; state: string }>();
+        if (!claimedReservation || claimedReservation.member_id !== memberId || claimedReservation.phone_e164 !== reservationPhone || claimedReservation.state !== "PENDING_SYNC") throw new Error("PHONE_CONFLICT");
+      }
     } catch (error) {
+      await env.PIN_DB.prepare("DELETE FROM member_outbox WHERE operation_key = ? AND state = 'PENDING'").bind(key).run();
       await env.PIN_DB.prepare("DELETE FROM member_idempotency WHERE operation_key = ? AND status = 'PENDING'").bind(key).run();
       throw error;
     }
@@ -307,6 +386,28 @@ async function memberOperation(env: Env, request: Request) {
     await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'FAILED', attempts = attempts + 1, last_error = ?, updated_at = ? WHERE operation_key = ?").bind(error instanceof Error ? error.message : "SYNC_FAILED", Date.now(), key).run();
     throw error;
   }
+}
+
+async function reconcileMemberOutbox(env: Env, request: Request) {
+  await verifyAdmin(env, request);
+  const requestedKey = new URL(request.url).searchParams.get("operationKey")?.trim() || "";
+  const rows = requestedKey
+    ? await env.PIN_DB.prepare("SELECT operation_key, member_id, operation, payload_json FROM member_outbox WHERE operation_key = ? AND state IN ('PENDING', 'FAILED')").bind(requestedKey).all<{ operation_key: string; member_id: string; operation: MemberOperation; payload_json: string }>()
+    : await env.PIN_DB.prepare("SELECT operation_key, member_id, operation, payload_json FROM member_outbox WHERE state IN ('PENDING', 'FAILED') ORDER BY updated_at ASC LIMIT 50").all<{ operation_key: string; member_id: string; operation: MemberOperation; payload_json: string }>();
+  const results: Array<Record<string, unknown>> = [];
+  for (const row of rows.results || []) {
+    try {
+      const payload = JSON.parse(row.payload_json) as MemberRecord | null;
+      await syncMemberOutbox(env, row.operation_key, row.member_id, row.operation, payload);
+      const result = { ok: true, operation: row.operation, memberId: row.member_id, state: "READY", operationKey: row.operation_key };
+      await env.PIN_DB.prepare("UPDATE member_idempotency SET status = 'COMPLETED', response_json = ?, updated_at = ? WHERE operation_key = ?").bind(JSON.stringify(result), Date.now(), row.operation_key).run();
+      results.push(result);
+    } catch (error) {
+      await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'FAILED', attempts = attempts + 1, last_error = ?, updated_at = ? WHERE operation_key = ?").bind(error instanceof Error ? error.message : "RECONCILE_FAILED", Date.now(), row.operation_key).run();
+      results.push({ ok: false, operationKey: row.operation_key, error: error instanceof Error ? error.message : "RECONCILE_FAILED" });
+    }
+  }
+  return json({ ok: true, processed: results.length, results }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function memberLogin(env: Env, request: Request) {
@@ -361,6 +462,7 @@ export default {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
       if (url.pathname === "/v1/admin/member") return await memberOperation(env, request);
+      if (url.pathname === "/v1/admin/member/reconcile") return await reconcileMemberOutbox(env, request);
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
@@ -368,7 +470,9 @@ export default {
     } catch (error) {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const status = code === "AUTH_REQUIRED" || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
-      return json({ error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : code === "AUTH_REQUIRED" ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" }, status, headers);
+      const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : code === "AUTH_REQUIRED" ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
+      if (env.LOCAL_TEST_MODE === "true" && env.LOCAL_TEST_DIAGNOSTICS === "true") body.code = code;
+      return json(body, status, headers);
     }
   },
 };
