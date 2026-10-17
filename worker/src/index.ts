@@ -4,10 +4,12 @@ interface Env {
   PIN_DB: D1Database;
   FIREBASE_DATABASE_URL: string;
   FIREBASE_WEB_API_KEY: string;
-  FIREBASE_SERVICE_ACCOUNT_EMAIL: string;
-  FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY: string;
+  FIREBASE_SERVICE_ACCOUNT_EMAIL?: string;
+  FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
+  FIREBASE_SERVICE_ACCOUNT_JSON?: string;
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
+  AUTH_DIAGNOSTICS?: string;
 }
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -15,6 +17,25 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
 
 function allowedOrigins(env: Env) {
   return (env.CORS_ORIGINS || env.CORS_ORIGIN || "").split(",").map(origin => origin.trim()).filter(Boolean);
+}
+
+function firebaseProject(env: Env) {
+  try {
+    const host = new URL(env.FIREBASE_DATABASE_URL).hostname;
+    return host.replace(/-default-rtdb\.firebaseio\.com$/i, "").replace(/\.firebaseio\.com$/i, "") || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function authDiagnostics(env: Env, values: { authorizationPresent: boolean; tokenAcquired: boolean; lookupHttpStatus: number | null; authFailureStage: string }) {
+  console.log(JSON.stringify({
+    authorization_present: values.authorizationPresent,
+    token_acquired: values.tokenAcquired,
+    firebase_project: firebaseProject(env),
+    lookup_http_status: values.lookupHttpStatus,
+    auth_failure_stage: values.authFailureStage,
+  }));
 }
 
 function cors(env: Env, requestOrigin = "") {
@@ -37,9 +58,16 @@ function pemToBytes(pem: string) {
 
 async function serviceAccessToken(env: Env) {
   const now = Math.floor(Date.now() / 1000);
+  let serviceAccount: { client_email?: string; private_key?: string } = {};
+  if (env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try { serviceAccount = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON) as typeof serviceAccount; } catch { throw new Error("Firebase service authentication failed"); }
+  }
+  const serviceEmail = serviceAccount.client_email || env.FIREBASE_SERVICE_ACCOUNT_EMAIL;
+  const privateKey = serviceAccount.private_key || env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  if (!serviceEmail || !privateKey) throw new Error("Firebase service authentication failed");
   const header = encodeBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = encodeBase64Url(JSON.stringify({ iss: env.FIREBASE_SERVICE_ACCOUNT_EMAIL, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
-  const key = await crypto.subtle.importKey("pkcs8", pemToBytes(env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const claim = encodeBase64Url(JSON.stringify({ iss: serviceEmail, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
+  const key = await crypto.subtle.importKey("pkcs8", pemToBytes(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(header + "." + claim));
   const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
   if (!response.ok) throw new Error("Firebase service authentication failed");
@@ -63,15 +91,37 @@ async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
 }
 
 async function verifyAdmin(env: Env, request: Request) {
-  const idToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!idToken) throw new Error("AUTH_REQUIRED");
+  const authorization = request.headers.get("authorization");
+  const idToken = authorization?.replace(/^Bearer\s+/i, "").trim() || "";
+  if (!idToken) {
+    authDiagnostics(env, { authorizationPresent: Boolean(authorization), tokenAcquired: false, lookupHttpStatus: null, authFailureStage: authorization ? "bearer_missing" : "authorization_missing" });
+    throw new Error("AUTH_REQUIRED:" + (authorization ? "bearer_missing" : "authorization_missing"));
+  }
   const lookup = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
-  if (!lookup.ok) throw new Error("AUTH_REQUIRED");
+  if (!lookup.ok) {
+    let failureStage = "identity_lookup_failed";
+    try {
+      const errorBody = await lookup.clone().json() as { error?: { message?: string; status?: string } };
+      const marker = `${errorBody.error?.status || ""}:${errorBody.error?.message || ""}`.toUpperCase();
+      if (marker.includes("INVALID_ID_TOKEN")) failureStage = "token_invalid";
+      else if (marker.includes("API_KEY_INVALID") || marker.includes("API_KEY_NOT_VALID")) failureStage = "api_key_mismatch";
+      else if (marker.includes("SERVICE_DISABLED") || marker.includes("PERMISSION_DENIED")) failureStage = "identity_toolkit_disabled_or_permission";
+    } catch { /* Keep the generic stage without logging provider response data. */ }
+    authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: failureStage });
+    throw new Error("AUTH_REQUIRED:" + failureStage);
+  }
   const account = await lookup.json() as { users?: Array<{ localId?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
   const user = account.users?.[0];
-  if (!user?.localId || user.emailVerified !== true || !user.providerUserInfo?.some(item => item.providerId === "google.com")) throw new Error("ADMIN_REQUIRED");
+  if (!user?.localId || user.emailVerified !== true || !user.providerUserInfo?.some(item => item.providerId === "google.com")) {
+    authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "identity_claims_not_admin_eligible" });
+    throw new Error("ADMIN_REQUIRED");
+  }
   const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean } | null;
-  if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) throw new Error("ADMIN_REQUIRED");
+  if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) {
+    authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "admin_record_missing_or_inactive_or_role" });
+    throw new Error("ADMIN_REQUIRED");
+  }
+  authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "success" });
   return user.localId;
 }
 
@@ -163,7 +213,7 @@ async function issuePin(env: Env, request: Request) {
   const body = await request.json() as { memberId?: unknown; phone?: unknown };
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   const { member } = await readMember(env, body.memberId);
-  const phone = normalizePhone(body.phone ?? member.phone);
+  const phone = normalizePhone(body.phone ?? member.phoneE164 ?? member.phoneDisplay ?? member.phone);
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
   const pin = randomPin();
   const credential = await hashPin(pin);
@@ -229,8 +279,12 @@ export default {
       return json({ error: "Not found" }, 404, headers);
     } catch (error) {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
-      const status = code === "AUTH_REQUIRED" || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
-      return json({ error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : code === "AUTH_REQUIRED" ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" }, status, headers);
+      const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
+      const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
+      if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
+      return json(body, status, headers);
     }
   },
 };
