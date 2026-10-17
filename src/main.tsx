@@ -310,6 +310,19 @@ function normalizeMembers(value: unknown): Member[] {
   const items = Array.isArray(value) ? value : [];
   return dedupeById(items.map(normalizeMember).filter((member): member is Member => Boolean(member)));
 }
+function normalizeCourses(value: unknown): ReadyCourse[] {
+  const items = Array.isArray(value) ? value : [];
+  return dedupeById(
+    items
+      .filter((course): course is Record<string, unknown> => Boolean(course && typeof course === "object"))
+      .map((course) => ({
+        id: String(course.id ?? ""),
+        name: String(course.name ?? "كورس بدون اسم"),
+        days: cloneDays(course.days),
+      }))
+      .filter((course) => course.id),
+  );
+}
 const blankDays = (count: number) =>
   Array.from({ length: count }, () => [] as DayPlan);
 type Page =
@@ -523,7 +536,7 @@ function CentralDataBridge({
             dedupeById((remote.exercises || []).map(normalizeExercise)),
           );
           setMembers(normalizeMembers(remote.members));
-          setCourses(dedupeById(remote.courses || []));
+          setCourses(normalizeCourses(remote.courses));
           setRemotePresent(true);
         }
         setRemoteReady(true);
@@ -683,7 +696,7 @@ function App({
     normalizeMembers(read<unknown>("alasas-members", [])),
   );
   const [courses, setCourses] = useState(() =>
-    read<ReadyCourse[]>("alasas-courses", []),
+    normalizeCourses(read<unknown>("alasas-courses", [])),
   );
   const [page, setPage] = useState<Page>("home");
   const [open, setOpen] = useState(false);

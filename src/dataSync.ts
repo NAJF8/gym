@@ -41,8 +41,12 @@ export type SyncPayload<TSettings, TExercise, TMember, TCourse> = {
   migratedAt?: string;
 };
 
-export function dedupeById<T extends { id: string }>(items: T[]) {
-  return [...new Map(items.map((item) => [item.id, item])).values()];
+export function dedupeById<T extends { id: string }>(items: unknown): T[] {
+  const safe = (Array.isArray(items) ? items : []).filter(
+    (item): item is T =>
+      Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"),
+  );
+  return [...new Map(safe.map((item) => [item.id, item])).values()];
 }
 
 /** RTDB rejects undefined anywhere in an update payload. */
