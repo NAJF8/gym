@@ -44,6 +44,13 @@
       ".read": false,
       ".write": false
     },
+    "memberPhoneIndex": {
+      ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+      "$phone": {
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+        ".validate": "newData.isString() && newData.val().length > 0"
+      }
+    },
     "membersByUid": {
       "$uid": {
         ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && auth.uid === $uid && data.child('active').val() === true",

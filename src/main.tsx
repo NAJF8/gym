@@ -41,11 +41,14 @@ import {
   firebaseSyncError,
   readMemberProfile,
   readAdminData,
+  readAdminMember,
   readAdminExercises,
   type SyncPayload,
   watchAdminData,
   watchPublicExercise,
   writeAdminData,
+  reserveMemberPhone,
+  releaseMemberPhone,
 } from "./dataSync";
 import {
   issueMemberPin,
@@ -55,7 +58,7 @@ import {
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
-import { safeImageUrl } from "./imageUrl";
+import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
 
 function MemberPinGate(){
@@ -93,7 +96,10 @@ type Member = {
   days: DayPlan[];
   active?: boolean;
   authUid?: string;
+  /** Legacy field accepted on read only. New records use phoneE164/phoneDisplay. */
   phone?: string;
+  phoneE164?: string;
+  phoneDisplay?: string;
 };
 type ReadyCourse = { id: string; name: string; days: DayPlan[] };
 type SettingsData = {
@@ -104,6 +110,9 @@ type SettingsData = {
   instagram: string;
   address: string;
   coachPhoto: string;
+  hallPhoto: string;
+  printCoachPhotoUrl: string;
+  printHallPhotoUrl: string;
   logo: string;
   showHeight: boolean;
   showWeight: boolean;
@@ -256,8 +265,11 @@ const defaults: SettingsData = {
   whatsapp: "",
   instagram: "",
   address: "",
-  coachPhoto: "",
-  logo: "",
+  coachPhoto: `${import.meta.env.BASE_URL}assets/coach.webp`,
+  hallPhoto: `${import.meta.env.BASE_URL}assets/hall.svg`,
+  printCoachPhotoUrl: `${import.meta.env.BASE_URL}assets/coach.webp`,
+  printHallPhotoUrl: `${import.meta.env.BASE_URL}assets/hall.svg`,
+  logo: `${import.meta.env.BASE_URL}assets/logo.webp`,
   showHeight: true,
   showWeight: true,
   showDate: true,
@@ -293,23 +305,72 @@ function normalizeMember(value: unknown): Member | null {
   const raw = value as Record<string, unknown>;
   const id = String(raw.id ?? "").trim();
   if (!id) return null;
+  const rawName = typeof raw.name === "string" ? raw.name.trim() : "";
+  const legacyPhone = raw.phoneE164 ?? raw.phone;
+  let phoneE164: string | undefined;
+  let phoneDisplay: string | undefined;
+  try {
+    phoneE164 = normalizeIraqiPhone(legacyPhone);
+    phoneDisplay = displayIraqiPhone(phoneE164);
+  } catch {
+    phoneE164 = undefined;
+    phoneDisplay = undefined;
+  }
   return {
     id,
     membershipId: raw.membershipId == null ? undefined : String(raw.membershipId),
-    name: String(raw.name ?? "مشترك بدون اسم"),
+    name: rawName,
     height: String(raw.height ?? ""),
     weight: String(raw.weight ?? ""),
     createdAt: String(raw.createdAt ?? "—"),
-    photo: typeof raw.photo === "string" ? raw.photo : "",
+    // Member photos are intentionally unsupported in this release.
+    photo: "",
     days: cloneDays(raw.days),
     active: raw.active !== false,
     authUid: raw.authUid == null ? undefined : String(raw.authUid),
-    phone: raw.phone == null ? undefined : String(raw.phone),
+    phoneE164,
+    phoneDisplay,
+  };
+}
+
+function memberPhoneE164(member: Pick<Member, "phoneE164" | "phoneDisplay" | "phone">) {
+  return normalizeIraqiPhone(member.phoneE164 ?? member.phoneDisplay ?? member.phone);
+}
+
+function memberPhoneDisplay(member: Pick<Member, "phoneE164" | "phoneDisplay" | "phone">) {
+  try { return displayIraqiPhone(member.phoneDisplay ?? member.phoneE164 ?? member.phone); }
+  catch { return ""; }
+}
+
+function normalizeSettings(value: unknown): SettingsData {
+  const raw = value && typeof value === "object" ? value as Partial<SettingsData> : {};
+  const coachDefault = defaults.coachPhoto;
+  const hallDefault = defaults.hallPhoto;
+  const staticAsset = (candidate: unknown, fallback: string) =>
+    typeof candidate === "string" && candidate === fallback ? candidate : fallback;
+  const coachPhoto = staticAsset(raw.coachPhoto, coachDefault);
+  const hallPhoto = staticAsset(raw.hallPhoto, hallDefault);
+  const logo = staticAsset(raw.logo, defaults.logo);
+  return {
+    ...defaults,
+    ...raw,
+    coachPhoto,
+    hallPhoto,
+    logo,
+    printCoachPhotoUrl: staticAsset(raw.printCoachPhotoUrl, coachPhoto),
+    printHallPhotoUrl: staticAsset(raw.printHallPhotoUrl, hallPhoto),
   };
 }
 function normalizeMembers(value: unknown): Member[] {
   const items = Array.isArray(value) ? value : [];
   return dedupeById(items.map(normalizeMember).filter((member): member is Member => Boolean(member)));
+}
+
+function cleanMemberName(value: unknown) {
+  const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!name || name === "0" || /^\d+$/.test(name) || !/[A-Za-z\u0600-\u06FF]/.test(name))
+    throw new Error("اسم المشترك إلزامي ويجب أن يحتوي على حروف، وليس رقماً فقط");
+  return name;
 }
 function normalizeCourses(value: unknown): ReadyCourse[] {
   const items = Array.isArray(value) ? value : [];
@@ -518,12 +579,15 @@ function CentralDataBridge({
     members,
     courses,
   };
+  const imageSource = (value: string, fallback = "") =>
+    /^(?:https?:\/\/|\/)/i.test(value) && !/^data:/i.test(value) ? value : fallback;
   const remoteSettings = {
     ...settings,
-    logo: /^https?:\/\//i.test(settings.logo) ? settings.logo : "",
-    coachPhoto: /^https?:\/\//i.test(settings.coachPhoto)
-      ? settings.coachPhoto
-      : "",
+    logo: imageSource(settings.logo, defaults.logo),
+    coachPhoto: imageSource(settings.coachPhoto, defaults.coachPhoto),
+    hallPhoto: imageSource(settings.hallPhoto, defaults.hallPhoto),
+    printCoachPhotoUrl: imageSource(settings.printCoachPhotoUrl, defaults.coachPhoto),
+    printHallPhotoUrl: imageSource(settings.printHallPhotoUrl, defaults.hallPhoto),
   };
   const payload: AppPayload = { ...localPayload, settings: remoteSettings };
   useEffect(
@@ -532,7 +596,7 @@ function CentralDataBridge({
         if (remote) {
           lastRemote.current = remote;
           hydrating.current = true;
-          setSettings(remote.settings || defaults);
+          setSettings(normalizeSettings(remote.settings));
           setExercises(
             dedupeById((remote.exercises || []).map(normalizeExercise)),
           );
@@ -545,23 +609,56 @@ function CentralDataBridge({
     [setSettings, setExercises, setMembers, setCourses],
   );
   useEffect(() => {
-    const save = async () => {
-      if (busy) return;
+    const save = async (requestedPayload: AppPayload = payload): Promise<boolean> => {
+      if (busy) return false;
+      const nextPayload = requestedPayload;
       const previousForSave = lastRemote.current;
       const previousExercises = Array.isArray(previousForSave?.exercises)
         ? previousForSave.exercises
         : [];
-      const changedExercises = payload.exercises.filter((exercise) => {
+      const changedExercises = nextPayload.exercises.filter((exercise) => {
         const old = previousExercises.find((item) => item.id === exercise.id);
         return !old || JSON.stringify(old) !== JSON.stringify(exercise);
       });
+      const previousMembers = Array.isArray(previousForSave?.members)
+        ? previousForSave.members
+        : [];
+      const changedMembers = nextPayload.members.filter((member) => {
+        const old = previousMembers.find((item) => item.id === member.id);
+        return !old || JSON.stringify(old) !== JSON.stringify(member);
+      });
+      const claimedPhones: Array<{ phone: string; memberId: string; oldPhone?: string }> = [];
+      for (const member of changedMembers) {
+        const name = cleanMemberName(member.name);
+        let phone: string;
+        try { phone = memberPhoneE164(member); } catch {
+          // A member may be saved without a phone; issuing a PIN remains blocked below.
+          continue;
+        }
+        const conflict = (Array.isArray(previousForSave?.members) ? previousForSave.members : [])
+          .find((item) => {
+            if (!item || item.id === member.id) return false;
+            try { return memberPhoneE164(normalizeMember(item) as Member) === phone; } catch { return false; }
+          });
+        if (conflict)
+          throw firebaseSyncError("update", "PHONE_CONFLICT", "رقم الهاتف مستخدم لمشترك آخر");
+        await reserveMemberPhone(phone, member.id);
+        claimedPhones.push({
+          phone,
+          memberId: member.id,
+          oldPhone: (() => {
+            const old = (previousForSave?.members as Array<Record<string, unknown>> | undefined)?.find((item) => item?.id === member.id);
+            try { return old ? memberPhoneE164(normalizeMember(old) as Member) : undefined; } catch { return undefined; }
+          })(),
+        });
+      }
       setBusy(true);
       setError("");
       window.dispatchEvent(
         new CustomEvent("alasas-save-status", { detail: "saving" }),
       );
       try {
-        await writeAdminData(payload, { role, previous: previousForSave });
+        await writeAdminData(nextPayload, { role, previous: previousForSave });
         console.info("[firebase-save]", { phase: "update", result: "ok" });
         const check = await readAdminData<AppPayload>();
         console.info("[firebase-save]", {
@@ -576,7 +673,7 @@ function CentralDataBridge({
           );
         if (
           role === "SUPER_ADMIN" &&
-          JSON.stringify(check.settings) !== JSON.stringify(remoteSettings)
+          JSON.stringify(check.settings) !== JSON.stringify(nextPayload.settings)
         )
           throw firebaseSyncError(
             "verify",
@@ -611,12 +708,34 @@ function CentralDataBridge({
               "تعذر تأكيد محتوى التمرين في Firebase RTDB",
             );
         }
+        if (changedMembers.length) {
+          for (const member of changedMembers) {
+            const persisted = await readAdminMember<Member>(member.id);
+            if (!persisted)
+              throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
+            if (JSON.stringify(persisted) !== JSON.stringify(member))
+              throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
+          }
+        }
         setRemotePresent(true);
-        lastRemote.current = payload;
+        lastRemote.current = nextPayload;
         window.dispatchEvent(
           new CustomEvent("alasas-save-status", { detail: "saved" }),
         );
+        for (const claim of claimedPhones) {
+          if (claim.oldPhone && claim.oldPhone !== claim.phone) {
+            try { await releaseMemberPhone(claim.oldPhone, claim.memberId); } catch (error) {
+              console.warn("[firebase-save] old phone index cleanup failed", error);
+            }
+          }
+        }
+        return true;
       } catch (e) {
+        for (const claim of claimedPhones) {
+          if (!claim.oldPhone || claim.oldPhone !== claim.phone) {
+            try { await releaseMemberPhone(claim.phone, claim.memberId); } catch { /* retain fail-closed lock */ }
+          }
+        }
         const syncError = e instanceof Error && "phase" in e && "code" in e
           ? (e as Error & { phase: string; code: string })
           : null;
@@ -634,12 +753,26 @@ function CentralDataBridge({
         window.dispatchEvent(
           new CustomEvent("alasas-save-status", { detail: message }),
         );
+        return false;
       } finally {
         setBusy(false);
       }
     };
-    window.addEventListener("alasas-save-settings", save);
-    return () => window.removeEventListener("alasas-save-settings", save);
+    const saveMember = (event: Event) => {
+      const detail = (event as CustomEvent<{ payload: AppPayload; resolve: (ok: boolean) => void }>).detail;
+      void save(detail.payload).then(detail.resolve).catch((error) => {
+        const message = error instanceof Error ? error.message : "تعذر حفظ المشترك";
+        window.dispatchEvent(new CustomEvent("alasas-save-status", { detail: message }));
+        detail.resolve(false);
+      });
+    };
+    const saveSettings = () => void save();
+    window.addEventListener("alasas-save-settings", saveSettings);
+    window.addEventListener("alasas-save-member", saveMember);
+    return () => {
+      window.removeEventListener("alasas-save-settings", saveSettings);
+      window.removeEventListener("alasas-save-member", saveMember);
+    };
   }, [payload, busy, remoteSettings, role]);
   const migrate = async () => {
     setBusy(true);
@@ -688,14 +821,13 @@ function App({
   onSignOut: () => void;
 }) {
   const [settings, setSettings] = useState(() =>
-    read("alasas-settings", defaults),
+    normalizeSettings(read("alasas-settings", defaults)),
   );
   const [exercises, setExercises] = useState(() =>
     read<Exercise[]>("alasas-exercises", seedExercises).map(normalizeExercise),
   );
-  const [members, setMembers] = useState(() =>
-    normalizeMembers(read<unknown>("alasas-members", [])),
-  );
+  // Members are authoritative in Firebase RTDB; localStorage is never used as their source.
+  const [members, setMembers] = useState<Member[]>([]);
   const [courses, setCourses] = useState(() =>
     normalizeCourses(read<unknown>("alasas-courses", [])),
   );
@@ -711,10 +843,6 @@ function App({
   useEffect(
     () => localStorage.setItem("alasas-exercises", JSON.stringify(exercises)),
     [exercises],
-  );
-  useEffect(
-    () => localStorage.setItem("alasas-members", JSON.stringify(members)),
-    [members],
   );
   useEffect(
     () => localStorage.setItem("alasas-courses", JSON.stringify(courses)),
@@ -794,6 +922,7 @@ function App({
                 <MembersWithPin
                   exercises={exercises}
                   members={members}
+                  courses={courses}
                   setMembers={setMembers}
                   settings={settings}
                 />
@@ -1742,7 +1871,12 @@ function WizardActions({
     </div>
   );
 }
-function MembersWithPin({exercises,members,setMembers,settings}:{exercises:Exercise[];members:Member[];setMembers:React.Dispatch<React.SetStateAction<Member[]>>;settings:SettingsData}){
+function requestMemberSave(payload: AppPayload) {
+  return new Promise<boolean>((resolve) => {
+    window.dispatchEvent(new CustomEvent("alasas-save-member", { detail: { payload, resolve } }));
+  });
+}
+function MembersWithPin({exercises,members,courses,setMembers,settings}:{exercises:Exercise[];members:Member[];courses:ReadyCourse[];setMembers:React.Dispatch<React.SetStateAction<Member[]>>;settings:SettingsData}){
   const [editing,setEditing]=useState<Member|null>(null);
   const [show,setShow]=useState(false);
   const [pin,setPin]=useState('');
@@ -1750,10 +1884,17 @@ function MembersWithPin({exercises,members,setMembers,settings}:{exercises:Exerc
   const [pinError,setPinError]=useState('');
   const [issueTarget,setIssueTarget]=useState<Member|null>(null);
   const [issuePhone,setIssuePhone]=useState('');
-  const save=(m:Member)=>{setMembers(x=>x.some(a=>a.id===m.id)?x.map(a=>a.id===m.id?{...a,...m,...(m.authUid||a.authUid?{authUid:m.authUid||a.authUid}:{}),...(m.phone?{phone:m.phone}:{}),...(m.photo?{photo:m.photo}:{photo:a.photo||''})}:a):[...x,m]);setShow(false);setEditing(null)};
-  const openIssue=(m:Member)=>{setPin('');setPinError('');setIssueTarget(m);setIssuePhone(m.phone||'')};
-  const issue=async(m:Member,requestedPhone:string)=>{const phone=requestedPhone.trim();if(!/^\+?[1-9]\d{7,14}$/.test(phone)){setPinError('أدخل رقم هاتف صحيحاً بصيغة دولية.');return}setPinBusy(true);setPinError('');setPin('');try{setPin(await issueMemberPin(m.id,phone,m.membershipId||m.id,true));setIssueTarget(null);setIssuePhone('')}catch(e){setPinError(e instanceof Error?e.message:'تعذر إصدار PIN من الخدمة الموثوقة')}finally{setPinBusy(false)}};
-  return <><section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={()=>{setEditing(null);setShow(true)}} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>{issueTarget&&<section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e=>setIssuePhone(e.target.value)}/></label><div><button className="secondary-btn" disabled={pinBusy} onClick={()=>issue(issueTarget,issuePhone)}>{pinBusy?'جارٍ الإصدار…':'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={()=>{setIssueTarget(null);setIssuePhone('')}}>إلغاء</button></div></section>}{pin&&<section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={()=>navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={()=>window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}{pinError&&<p className="auth-error" role="alert">{pinError}</p>}{members.length?<div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{m.phone||'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button onClick={()=>setEditing(m)}><ExternalLink size={14}/>عرض</button><button onClick={()=>{setEditing(m);setShow(true)}}><Pencil size={14}/>تعديل</button><button disabled={pinBusy} onClick={()=>openIssue(m)}><Check size={14}/>إصدار / إعادة إصدار PIN</button><button onClick={()=>printMember(m,settings)}><Printer size={14}/>طباعة</button><button onClick={()=>{if(window.confirm(`حذف المشترك ${m.name}؟`))setMembers(x=>x.filter(a=>a.id!==m.id))}}><Trash2 size={14}/>حذف</button></div></td></tr>)}</tbody></table></div></div>:<Empty icon={<Users size={30}/>} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل."/>}{(show||editing)&&<MemberWizard initial={editing} exercises={exercises} onClose={()=>{setShow(false);setEditing(null)}} onSave={save} viewOnly={!show}/>}</>}
+  const save=async(m:Member)=>{
+    const nextMembers = members.some(a=>a.id===m.id)
+      ? members.map(a=>a.id===m.id?{...a,...m,photo:"",...(m.authUid||a.authUid?{authUid:m.authUid||a.authUid}:{}),...(m.phoneE164?{phoneE164:m.phoneE164,phoneDisplay:m.phoneDisplay}:{} )}:a)
+      : [{...m,photo:""},...members];
+    setMembers(nextMembers);
+    const ok = await requestMemberSave({schemaVersion:1, settings, exercises, members:nextMembers, courses});
+    if (ok) { setShow(false); setEditing(null); }
+  };
+  const openIssue=(m:Member)=>{setPin('');setPinError('');setIssueTarget(m);setIssuePhone(memberPhoneDisplay(m))};
+  const issue=async(m:Member,requestedPhone:string)=>{setPinBusy(true);setPinError('');setPin('');try{const phone=normalizeIraqiPhone(requestedPhone);const remote=await readAdminData<AppPayload>();const persisted=normalizeMembers(remote?.members).find(item=>item.id===m.id);if(!persisted)throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');setPin(await issueMemberPin(persisted.id,phone,persisted.membershipId||persisted.id,true));setIssueTarget(null);setIssuePhone('')}catch(e){setPinError(e instanceof Error?e.message:'تعذر إصدار PIN من الخدمة الموثوقة')}finally{setPinBusy(false)}};
+  return <><section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={()=>{setEditing(null);setShow(true)}} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>{issueTarget&&<section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e=>setIssuePhone(e.target.value)}/></label><small>المعروض: {memberPhoneDisplay(issueTarget)||'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={()=>issue(issueTarget,issuePhone)}>{pinBusy?'جارٍ الإصدار…':'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={()=>{setIssueTarget(null);setIssuePhone('')}}>إلغاء</button></div></section>}{pin&&<section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={()=>navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={()=>window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}{pinError&&<p className="auth-error" role="alert">{pinError}</p>}{members.length?<div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m)||'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button onClick={()=>setEditing(m)}><ExternalLink size={14}/>عرض</button><button onClick={()=>{setEditing(m);setShow(true)}}><Pencil size={14}/>تعديل</button><button disabled={pinBusy} onClick={()=>openIssue(m)}><Check size={14}/>إصدار / إعادة إصدار PIN</button><button onClick={()=>printMember(m,settings)}><Printer size={14}/>طباعة</button><button onClick={()=>{if(window.confirm(`حذف المشترك ${m.name}؟`))setMembers(x=>x.filter(a=>a.id!==m.id))}}><Trash2 size={14}/>حذف</button></div></td></tr>)}</tbody></table></div></div>:<Empty icon={<Users size={30}/>} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل."/>}{(show||editing)&&<MemberWizard initial={editing} exercises={exercises} onClose={()=>{setShow(false);setEditing(null)}} onSave={save} viewOnly={!show}/>}</>}
 function Members({
   exercises,
   members,
@@ -1888,7 +2029,7 @@ function MemberWizard({
   initial: Member | null;
   exercises: Exercise[];
   onClose: () => void;
-  onSave: (m: Member) => void;
+  onSave: (m: Member) => void | Promise<void>;
   viewOnly?: boolean;
 }) {
   const [step, setStep] = useState(1);
@@ -1897,11 +2038,11 @@ function MemberWizard({
     initial?.membershipId || `M-${Date.now().toString().slice(-6)}`,
   );
   const [authUid, setAuthUid] = useState(initial?.authUid || "");
-  const [phone, setPhone] = useState(initial?.phone || "");
+  const [phone, setPhone] = useState(initial?.phoneDisplay || initial?.phoneE164 || initial?.phone || "");
   const [active, setActive] = useState(initial?.active !== false);
   const [height, setHeight] = useState(initial?.height || "");
   const [weight, setWeight] = useState(initial?.weight || "");
-  const [photo, setPhoto] = useState(initial?.photo || "");
+  const [validationError, setValidationError] = useState("");
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
   const [muscle, setMuscle] = useState(muscles[0]);
@@ -2014,20 +2155,6 @@ function MemberWizard({
                   />
                   عضوية فعالة
                 </label>
-                <label>
-                  صورة المشترك
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onload = () => setPhoto(String(reader.result));
-                      reader.readAsDataURL(file);
-                    }}
-                  />
-                </label>
               </>
             )}
           </div>
@@ -2036,13 +2163,6 @@ function MemberWizard({
               يصدر المدرب PIN رباعياً من زر الإصدار بعد حفظ المشترك. لا يُستخدم
               Google لتسجيل المشتركين.
             </p>
-          )}
-          {photo && (
-            <img
-              className="member-photo-preview"
-              src={photo}
-              alt="معاينة صورة المشترك"
-            />
           )}
         </div>
       )}
@@ -2103,27 +2223,36 @@ function MemberWizard({
         )}
         {!viewOnly && step === 4 && (
           <Button
-            onClick={() =>
-              onSave({
-                id: initial?.id || uid(),
-                membershipId,
-                name: name || "مشترك بدون اسم",
-                height,
-                weight,
-                createdAt:
-                  initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
-                photo,
-                days: cloneDays(selected.slice(0, days)),
-                active,
-                ...(phone.trim() ? { phone: phone.trim() } : {}),
-                ...(authUid.trim() ? { authUid: authUid.trim() } : {}),
-              })
-            }
+            onClick={async () => {
+              try {
+                const normalizedMemberName = cleanMemberName(name);
+                const normalizedMemberPhone = phone.trim() ? normalizeIraqiPhone(phone) : "";
+                setValidationError("");
+                await onSave({
+                  id: initial?.id || uid(),
+                  membershipId: membershipId.trim(),
+                  name: normalizedMemberName,
+                  height,
+                  weight,
+                  createdAt: initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
+                  ...(normalizedMemberPhone ? {
+                    phoneE164: normalizedMemberPhone,
+                    phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
+                  } : {}),
+                  days: cloneDays(selected.slice(0, days)),
+                  active,
+                  ...(authUid.trim() ? { authUid: authUid.trim() } : {}),
+                });
+              } catch (error) {
+                setValidationError(error instanceof Error ? error.message : "بيانات المشترك غير صالحة");
+              }
+            }}
             icon={<Check size={16} />}
           >
             حفظ
           </Button>
         )}
+        {validationError && <p className="auth-error" role="alert">{validationError}</p>}
         {viewOnly && step < 4 && (
           <Button onClick={() => setStep(step + 1)}>
             التالي <ArrowLeft size={16} />
@@ -2385,11 +2514,6 @@ function SettingsPage({
     setSaveState("idle");
     setS((x) => ({ ...x, [key]: value }));
   };
-  const upload = (key: "logo" | "coachPhoto", file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => update(key, String(reader.result));
-    reader.readAsDataURL(file);
-  };
   const save = () => {
     if (saveState === "saving" || !firebaseConfigured) return;
     window.dispatchEvent(new Event("alasas-save-settings"));
@@ -2445,18 +2569,12 @@ function SettingsPage({
         </div>
       </section>
       <section className="settings-block">
-        <h2>الشعار والصورة</h2>
+        <h2>الصور الثابتة</h2>
+        <p>صور الكابتن والقاعة تُدار كملفات ثابتة داخل <code>public/assets/</code> وتُنشر عبر Firebase Hosting. لا يوجد رفع أو حفظ صور من لوحة الإدارة في هذا الإصدار.</p>
         <div className="upload-grid">
-          <Upload
-            label="شعار القاعة"
-            value={s.logo}
-            onChange={(f) => upload("logo", f)}
-          />
-          <Upload
-            label="صورة الكابتن"
-            value={s.coachPhoto}
-            onChange={(f) => upload("coachPhoto", f)}
-          />
+          <StaticAsset label="شعار القاعة" value={s.logo} />
+          <StaticAsset label="صورة الكابتن (افتراضية مؤقتة)" value={s.coachPhoto} />
+          <StaticAsset label="صورة القاعة (افتراضية مؤقتة)" value={s.hallPhoto} />
         </div>
       </section>
       <section className="settings-block">
@@ -2521,29 +2639,19 @@ function SettingsPage({
     </div>
   );
 }
-function Upload({
+function StaticAsset({
   label,
   value,
-  onChange,
 }: {
   label: string;
   value: string;
-  onChange: (file: File) => void;
 }) {
   return (
-    <label className="upload-box">
+    <div className="upload-box static-asset">
       {value && <img src={value} alt="" />}
       <span>{label}</span>
-      <small>اضغط لاختيار صورة</small>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onChange(file);
-        }}
-      />
-    </label>
+      <small>المسار: {value}</small>
+    </div>
   );
 }
 function Modal({
@@ -2581,20 +2689,20 @@ function printMemberLegacy(m: Member, s: SettingsData) {
       ? `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={target} size={58} includeMargin level="M" />)}</div>`
       : '<span class="qr-empty">الشرح غير متوفر</span>';
   };
-  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff}header{display:grid;grid-template-columns:72px 1fr 1fr;gap:12px;align-items:center;border-bottom:3px solid #b7ff2a;padding-bottom:12px;margin-bottom:14px}header img{max-height:58px;max-width:120px;object-fit:contain}.member-photo{width:72px;height:82px;border:1px solid #ddd;object-fit:cover}header>div:first-of-type{grid-column:1;grid-row:1}header>div:nth-of-type(2){grid-column:2;grid-row:1}header>.member-photo,header>.member-photo.placeholder{grid-column:3;grid-row:1}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:14px 0 6px;border-bottom:1px solid #ddd;padding-bottom:5px}.meta{font-size:10px;color:#525960}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:8px 0}.exercise-head,.exercise{display:grid;grid-template-columns:20px 1fr 90px 60px 66px;gap:6px;align-items:center}.exercise-head{font-weight:700;color:#525960;font-size:9px;padding:3px 0 6px;border-bottom:1px solid #ddd}.exercise{border-bottom:1px solid #eee;padding:7px 0;font-size:10px}.exercise:last-child{border:0}.exercise small{display:block;color:#525960}.qr{width:58px;height:58px;background:#fff;padding:4px;display:grid;place-items:center}.qr svg{width:50px;height:50px}.qr-empty{font-size:8px;color:#777;text-align:center}.footer{margin-top:15px;border-top:1px solid #ddd;padding-top:8px;font-size:9px;color:#525960;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}section{break-inside:avoid}</style></head><body><header>${m.photo ? `<img class="member-photo" src="${m.photo}" alt="صورة المشترك">` : "<span></span>"}<div><h1>${escapeHtml(m.name)}</h1><div class="meta">${s.showHeight ? `${escapeHtml(m.height || "—")} سم · ` : ""}${s.showWeight ? `${escapeHtml(m.weight || "—")} كغم` : ""}${s.showDate ? ` · ${escapeHtml(m.createdAt)}` : ""}</div></div><div><strong>${escapeHtml(s.gymName)}</strong>${s.logo ? `<br><img src="${s.logo}" alt="شعار القاعة">` : ""}<div class="meta">${escapeHtml(s.coachName)}</div></div></header>${m.days.map((day, i) => `<section class="day"><h2>اليوم ${i + 1}</h2>${day.length ? `<div class="exercise-head"><span>م</span><span>التمرين</span><span>المجاميع × التكرارات</span><span>الراحة</span><span>QR</span></div>${day.map((e, n) => `<div class="exercise"><b>${n + 1}</b><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></div><span>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</span><span>${escapeHtml(e.rest || "—")}</span>${qrMarkup(e)}</div>`).join("")}` : '<div class="meta">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<div class="footer"><span>${escapeHtml(s.phone)}</span><span>${escapeHtml(s.instagram)}</span><span>${escapeHtml(s.address)}</span></div><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
+  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff}header{display:grid;grid-template-columns:72px 1fr 1fr;gap:12px;align-items:center;border-bottom:3px solid #b7ff2a;padding-bottom:12px;margin-bottom:14px}header img{max-height:58px;max-width:120px;object-fit:contain}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:14px 0 6px;border-bottom:1px solid #ddd;padding-bottom:5px}.meta{font-size:10px;color:#525960}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:8px 0}.exercise-head,.exercise{display:grid;grid-template-columns:20px 1fr 90px 60px 66px;gap:6px;align-items:center}.exercise-head{font-weight:700;color:#525960;font-size:9px;padding:3px 0 6px;border-bottom:1px solid #ddd}.exercise{border-bottom:1px solid #eee;padding:7px 0;font-size:10px}.exercise:last-child{border:0}.exercise small{display:block;color:#525960}.qr{width:58px;height:58px;background:#fff;padding:4px;display:grid;place-items:center}.qr svg{width:50px;height:50px}.qr-empty{font-size:8px;color:#777;text-align:center}.footer{margin-top:15px;border-top:1px solid #ddd;padding-top:8px;font-size:9px;color:#525960;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}section{break-inside:avoid}</style></head><body><header><div></div><div><h1>${escapeHtml(m.name)}</h1><div class="meta">${s.showHeight ? `${escapeHtml(m.height || "—")} سم · ` : ""}${s.showWeight ? `${escapeHtml(m.weight || "—")} كغم` : ""}${s.showDate ? ` · ${escapeHtml(m.createdAt)}` : ""}</div></div><div><strong>${escapeHtml(s.gymName)}</strong>${s.logo ? `<br><img src="${s.logo}" alt="شعار القاعة">` : ""}<div class="meta">${escapeHtml(s.coachName)}</div></div></header>${m.days.map((day, i) => `<section class="day"><h2>اليوم ${i + 1}</h2>${day.length ? `<div class="exercise-head"><span>م</span><span>التمرين</span><span>المجاميع × التكرارات</span><span>الراحة</span><span>QR</span></div>${day.map((e, n) => `<div class="exercise"><b>${n + 1}</b><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></div><span>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</span><span>${escapeHtml(e.rest || "—")}</span>${qrMarkup(e)}</div>`).join("")}` : '<div class="meta">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<div class="footer"><span>${escapeHtml(s.phone)}</span><span>${escapeHtml(s.instagram)}</span><span>${escapeHtml(s.address)}</span></div><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return;
   w.document.write(html);
   w.document.close();
 }
 function printMember(m: Member, s: SettingsData) {
-  const coachPhoto = safeImageUrl(s.coachPhoto);
-  const logo = safeImageUrl(s.logo);
   const qrMarkup = (e: MemberExercise) => `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div>`;
   const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="num">${n + 1}</td><td class="exercise-name"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></td><td>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
+  const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
+  const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm}.coach{text-align:left}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;border:1px solid #b7ff2a}.brand{text-align:center}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day-title small{display:block;font-size:9px;font-weight:400;color:#555}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${logo ? `<img src="${logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span></footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
+    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span></footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return;
   w.document.write(html);

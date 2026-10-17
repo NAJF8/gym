@@ -1,4 +1,4 @@
-import { get, onValue, ref, update, type Unsubscribe } from "firebase/database";
+import { get, onValue, ref, runTransaction, update, type Unsubscribe } from "firebase/database";
 import { firebaseDatabase } from "./firebase";
 import { safeVideoUrl } from "./videoUrl";
 
@@ -90,6 +90,12 @@ export async function readAdminData<T>() {
   }
 }
 
+export async function readAdminMember<T>(memberId: string) {
+  const data = await readAdminData<{ members?: unknown }>();
+  const members = Array.isArray(data?.members) ? data.members : [];
+  return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
+}
+
 export async function readAdminExercises<T>() {
   if (!firebaseDatabase) return null;
   try {
@@ -104,6 +110,38 @@ export async function readMemberProfile<T>(uid: string) {
   if (!firebaseDatabase) return null;
   const snapshot = await get(ref(firebaseDatabase, `membersByUid/${uid}`));
   return snapshot.exists() ? (snapshot.val() as T) : null;
+}
+
+function phoneIndexKey(phone: string) {
+  return encodeURIComponent(phone);
+}
+
+/** Atomically claims a phone number for a member. The index is only a lock/uniqueness aid. */
+export async function reserveMemberPhone(phone: string, memberId: string) {
+  if (!firebaseDatabase) throw new Error("Firebase RTDB غير مهيأ");
+  try {
+    const result = await runTransaction(
+      ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`),
+      (current) => current === null || current === memberId ? memberId : undefined,
+    );
+    if (!result.committed || result.snapshot.val() !== memberId)
+      throw firebaseSyncError("update", "PHONE_CONFLICT", "رقم الهاتف مستخدم لمشترك آخر");
+  } catch (error) {
+    if (error instanceof FirebaseSyncError) throw error;
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر حجز رقم الهاتف في Firebase RTDB");
+  }
+}
+
+export async function releaseMemberPhone(phone: string, memberId: string) {
+  if (!firebaseDatabase) return;
+  try {
+    await runTransaction(
+      ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`),
+      (current) => current === memberId ? null : current,
+    );
+  } catch (error) {
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر تحرير حجز رقم الهاتف القديم");
+  }
 }
 
 export function watchMemberProfile<T>(
@@ -247,7 +285,6 @@ export async function writeAdminData<T>(
       height: member.height || "",
       weight: member.weight || "",
       createdAt: member.createdAt || "",
-      photo: member.photo || "",
       days: member.days || [],
       active: member.active !== false,
     });
