@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">صورة قاعة افتراضية</title>
+  <desc id="desc">صورة افتراضية مؤقتة وليست صورة مستخدم</desc>
+  <rect width="1200" height="760" fill="#e9eee8"/>
+  <path d="M0 535 235 310l190 174 190-260 220 212 148-132 217 191v265H0Z" fill="#c6d2c3"/>
+  <path d="M80 590h1040M160 510h880" stroke="#829781" stroke-width="12" opacity=".6"/>
+  <rect x="420" y="250" width="360" height="240" rx="18" fill="#172018" opacity=".9"/>
+  <path d="M470 450h260M500 300v140m200-140v140M450 350h300" stroke="#b7ff2a" stroke-width="18"/>
+  <text x="600" y="680" text-anchor="middle" fill="#172018" font-family="Arial,Tahoma,sans-serif" font-size="34" font-weight="700">قاعة افتراضية - مؤقت</text>
+</svg>

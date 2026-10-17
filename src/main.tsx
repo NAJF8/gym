@@ -265,11 +265,11 @@ const defaults: SettingsData = {
   whatsapp: "",
   instagram: "",
   address: "",
-  coachPhoto: "",
-  hallPhoto: "",
-  printCoachPhotoUrl: "",
-  printHallPhotoUrl: "",
-  logo: "",
+  coachPhoto: `${import.meta.env.BASE_URL}assets/coach.webp`,
+  hallPhoto: `${import.meta.env.BASE_URL}assets/hall.svg`,
+  printCoachPhotoUrl: `${import.meta.env.BASE_URL}assets/coach.webp`,
+  printHallPhotoUrl: `${import.meta.env.BASE_URL}assets/hall.svg`,
+  logo: `${import.meta.env.BASE_URL}assets/logo.webp`,
   showHeight: true,
   showWeight: true,
   showDate: true,
@@ -323,7 +323,8 @@ function normalizeMember(value: unknown): Member | null {
     height: String(raw.height ?? ""),
     weight: String(raw.weight ?? ""),
     createdAt: String(raw.createdAt ?? "—"),
-    photo: typeof raw.photo === "string" ? raw.photo : "",
+    // Member photos are intentionally unsupported in this release.
+    photo: "",
     days: cloneDays(raw.days),
     active: raw.active !== false,
     authUid: raw.authUid == null ? undefined : String(raw.authUid),
@@ -343,15 +344,21 @@ function memberPhoneDisplay(member: Pick<Member, "phoneE164" | "phoneDisplay" | 
 
 function normalizeSettings(value: unknown): SettingsData {
   const raw = value && typeof value === "object" ? value as Partial<SettingsData> : {};
-  const coachPhoto = typeof raw.coachPhoto === "string" ? raw.coachPhoto : "";
-  const hallPhoto = typeof raw.hallPhoto === "string" ? raw.hallPhoto : "";
+  const coachDefault = defaults.coachPhoto;
+  const hallDefault = defaults.hallPhoto;
+  const staticAsset = (candidate: unknown, fallback: string) =>
+    typeof candidate === "string" && candidate === fallback ? candidate : fallback;
+  const coachPhoto = staticAsset(raw.coachPhoto, coachDefault);
+  const hallPhoto = staticAsset(raw.hallPhoto, hallDefault);
+  const logo = staticAsset(raw.logo, defaults.logo);
   return {
     ...defaults,
     ...raw,
     coachPhoto,
     hallPhoto,
-    printCoachPhotoUrl: typeof raw.printCoachPhotoUrl === "string" && raw.printCoachPhotoUrl ? raw.printCoachPhotoUrl : coachPhoto,
-    printHallPhotoUrl: typeof raw.printHallPhotoUrl === "string" && raw.printHallPhotoUrl ? raw.printHallPhotoUrl : hallPhoto,
+    logo,
+    printCoachPhotoUrl: staticAsset(raw.printCoachPhotoUrl, coachPhoto),
+    printHallPhotoUrl: staticAsset(raw.printHallPhotoUrl, hallPhoto),
   };
 }
 function normalizeMembers(value: unknown): Member[] {
@@ -572,14 +579,15 @@ function CentralDataBridge({
     members,
     courses,
   };
-  const imageSource = (value: string) => /^(?:https?:\/\/|data:image\/)/i.test(value) ? value : "";
+  const imageSource = (value: string, fallback = "") =>
+    /^(?:https?:\/\/|\/)/i.test(value) && !/^data:/i.test(value) ? value : fallback;
   const remoteSettings = {
     ...settings,
-    logo: imageSource(settings.logo),
-    coachPhoto: imageSource(settings.coachPhoto),
-    hallPhoto: imageSource(settings.hallPhoto),
-    printCoachPhotoUrl: imageSource(settings.printCoachPhotoUrl || settings.coachPhoto),
-    printHallPhotoUrl: imageSource(settings.printHallPhotoUrl || settings.hallPhoto),
+    logo: imageSource(settings.logo, defaults.logo),
+    coachPhoto: imageSource(settings.coachPhoto, defaults.coachPhoto),
+    hallPhoto: imageSource(settings.hallPhoto, defaults.hallPhoto),
+    printCoachPhotoUrl: imageSource(settings.printCoachPhotoUrl, defaults.coachPhoto),
+    printHallPhotoUrl: imageSource(settings.printHallPhotoUrl, defaults.hallPhoto),
   };
   const payload: AppPayload = { ...localPayload, settings: remoteSettings };
   useEffect(
@@ -1878,8 +1886,8 @@ function MembersWithPin({exercises,members,courses,setMembers,settings}:{exercis
   const [issuePhone,setIssuePhone]=useState('');
   const save=async(m:Member)=>{
     const nextMembers = members.some(a=>a.id===m.id)
-      ? members.map(a=>a.id===m.id?{...a,...m,...(m.authUid||a.authUid?{authUid:m.authUid||a.authUid}:{}),...(m.phoneE164?{phoneE164:m.phoneE164,phoneDisplay:m.phoneDisplay}:{}),...(m.photo?{photo:m.photo}:{})}:a)
-      : [...members,m];
+      ? members.map(a=>a.id===m.id?{...a,...m,photo:"",...(m.authUid||a.authUid?{authUid:m.authUid||a.authUid}:{}),...(m.phoneE164?{phoneE164:m.phoneE164,phoneDisplay:m.phoneDisplay}:{} )}:a)
+      : [{...m,photo:""},...members];
     setMembers(nextMembers);
     const ok = await requestMemberSave({schemaVersion:1, settings, exercises, members:nextMembers, courses});
     if (ok) { setShow(false); setEditing(null); }
@@ -2506,15 +2514,6 @@ function SettingsPage({
     setSaveState("idle");
     setS((x) => ({ ...x, [key]: value }));
   };
-  const upload = (key: "logo" | "coachPhoto" | "hallPhoto", file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result);
-      setSaveState("idle");
-      setS((x) => ({ ...x, [key]: value, ...(key === "coachPhoto" ? { printCoachPhotoUrl: value } : {}), ...(key === "hallPhoto" ? { printHallPhotoUrl: value } : {}) }));
-    };
-    reader.readAsDataURL(file);
-  };
   const save = () => {
     if (saveState === "saving" || !firebaseConfigured) return;
     window.dispatchEvent(new Event("alasas-save-settings"));
@@ -2570,23 +2569,12 @@ function SettingsPage({
         </div>
       </section>
       <section className="settings-block">
-        <h2>الشعار والصورة</h2>
+        <h2>الصور الثابتة</h2>
+        <p>صور الكابتن والقاعة تُدار كملفات ثابتة داخل <code>public/assets/</code> وتُنشر عبر Firebase Hosting. لا يوجد رفع أو حفظ صور من لوحة الإدارة في هذا الإصدار.</p>
         <div className="upload-grid">
-          <Upload
-            label="شعار القاعة"
-            value={s.logo}
-            onChange={(f) => upload("logo", f)}
-          />
-          <Upload
-            label="صورة الكابتن (قالب الطباعة)"
-            value={s.coachPhoto}
-            onChange={(f) => upload("coachPhoto", f)}
-          />
-          <Upload
-            label="صورة القاعة (قالب الطباعة)"
-            value={s.hallPhoto}
-            onChange={(f) => upload("hallPhoto", f)}
-          />
+          <StaticAsset label="شعار القاعة" value={s.logo} />
+          <StaticAsset label="صورة الكابتن (افتراضية مؤقتة)" value={s.coachPhoto} />
+          <StaticAsset label="صورة القاعة (افتراضية مؤقتة)" value={s.hallPhoto} />
         </div>
       </section>
       <section className="settings-block">
@@ -2651,29 +2639,19 @@ function SettingsPage({
     </div>
   );
 }
-function Upload({
+function StaticAsset({
   label,
   value,
-  onChange,
 }: {
   label: string;
   value: string;
-  onChange: (file: File) => void;
 }) {
   return (
-    <label className="upload-box">
+    <div className="upload-box static-asset">
       {value && <img src={value} alt="" />}
       <span>{label}</span>
-      <small>اضغط لاختيار صورة</small>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onChange(file);
-        }}
-      />
-    </label>
+      <small>المسار: {value}</small>
+    </div>
   );
 }
 function Modal({
@@ -2711,7 +2689,7 @@ function printMemberLegacy(m: Member, s: SettingsData) {
       ? `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={target} size={58} includeMargin level="M" />)}</div>`
       : '<span class="qr-empty">الشرح غير متوفر</span>';
   };
-  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff}header{display:grid;grid-template-columns:72px 1fr 1fr;gap:12px;align-items:center;border-bottom:3px solid #b7ff2a;padding-bottom:12px;margin-bottom:14px}header img{max-height:58px;max-width:120px;object-fit:contain}.member-photo{width:72px;height:82px;border:1px solid #ddd;object-fit:cover}header>div:first-of-type{grid-column:1;grid-row:1}header>div:nth-of-type(2){grid-column:2;grid-row:1}header>.member-photo,header>.member-photo.placeholder{grid-column:3;grid-row:1}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:14px 0 6px;border-bottom:1px solid #ddd;padding-bottom:5px}.meta{font-size:10px;color:#525960}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:8px 0}.exercise-head,.exercise{display:grid;grid-template-columns:20px 1fr 90px 60px 66px;gap:6px;align-items:center}.exercise-head{font-weight:700;color:#525960;font-size:9px;padding:3px 0 6px;border-bottom:1px solid #ddd}.exercise{border-bottom:1px solid #eee;padding:7px 0;font-size:10px}.exercise:last-child{border:0}.exercise small{display:block;color:#525960}.qr{width:58px;height:58px;background:#fff;padding:4px;display:grid;place-items:center}.qr svg{width:50px;height:50px}.qr-empty{font-size:8px;color:#777;text-align:center}.footer{margin-top:15px;border-top:1px solid #ddd;padding-top:8px;font-size:9px;color:#525960;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}section{break-inside:avoid}</style></head><body><header>${m.photo ? `<img class="member-photo" src="${m.photo}" alt="صورة المشترك">` : "<span></span>"}<div><h1>${escapeHtml(m.name)}</h1><div class="meta">${s.showHeight ? `${escapeHtml(m.height || "—")} سم · ` : ""}${s.showWeight ? `${escapeHtml(m.weight || "—")} كغم` : ""}${s.showDate ? ` · ${escapeHtml(m.createdAt)}` : ""}</div></div><div><strong>${escapeHtml(s.gymName)}</strong>${s.logo ? `<br><img src="${s.logo}" alt="شعار القاعة">` : ""}<div class="meta">${escapeHtml(s.coachName)}</div></div></header>${m.days.map((day, i) => `<section class="day"><h2>اليوم ${i + 1}</h2>${day.length ? `<div class="exercise-head"><span>م</span><span>التمرين</span><span>المجاميع × التكرارات</span><span>الراحة</span><span>QR</span></div>${day.map((e, n) => `<div class="exercise"><b>${n + 1}</b><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></div><span>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</span><span>${escapeHtml(e.rest || "—")}</span>${qrMarkup(e)}</div>`).join("")}` : '<div class="meta">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<div class="footer"><span>${escapeHtml(s.phone)}</span><span>${escapeHtml(s.instagram)}</span><span>${escapeHtml(s.address)}</span></div><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
+  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff}header{display:grid;grid-template-columns:72px 1fr 1fr;gap:12px;align-items:center;border-bottom:3px solid #b7ff2a;padding-bottom:12px;margin-bottom:14px}header img{max-height:58px;max-width:120px;object-fit:contain}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:14px 0 6px;border-bottom:1px solid #ddd;padding-bottom:5px}.meta{font-size:10px;color:#525960}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:8px 0}.exercise-head,.exercise{display:grid;grid-template-columns:20px 1fr 90px 60px 66px;gap:6px;align-items:center}.exercise-head{font-weight:700;color:#525960;font-size:9px;padding:3px 0 6px;border-bottom:1px solid #ddd}.exercise{border-bottom:1px solid #eee;padding:7px 0;font-size:10px}.exercise:last-child{border:0}.exercise small{display:block;color:#525960}.qr{width:58px;height:58px;background:#fff;padding:4px;display:grid;place-items:center}.qr svg{width:50px;height:50px}.qr-empty{font-size:8px;color:#777;text-align:center}.footer{margin-top:15px;border-top:1px solid #ddd;padding-top:8px;font-size:9px;color:#525960;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}section{break-inside:avoid}</style></head><body><header><div></div><div><h1>${escapeHtml(m.name)}</h1><div class="meta">${s.showHeight ? `${escapeHtml(m.height || "—")} سم · ` : ""}${s.showWeight ? `${escapeHtml(m.weight || "—")} كغم` : ""}${s.showDate ? ` · ${escapeHtml(m.createdAt)}` : ""}</div></div><div><strong>${escapeHtml(s.gymName)}</strong>${s.logo ? `<br><img src="${s.logo}" alt="شعار القاعة">` : ""}<div class="meta">${escapeHtml(s.coachName)}</div></div></header>${m.days.map((day, i) => `<section class="day"><h2>اليوم ${i + 1}</h2>${day.length ? `<div class="exercise-head"><span>م</span><span>التمرين</span><span>المجاميع × التكرارات</span><span>الراحة</span><span>QR</span></div>${day.map((e, n) => `<div class="exercise"><b>${n + 1}</b><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></div><span>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</span><span>${escapeHtml(e.rest || "—")}</span>${qrMarkup(e)}</div>`).join("")}` : '<div class="meta">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<div class="footer"><span>${escapeHtml(s.phone)}</span><span>${escapeHtml(s.instagram)}</span><span>${escapeHtml(s.address)}</span></div><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return;
   w.document.write(html);
@@ -2723,7 +2701,7 @@ function printMember(m: Member, s: SettingsData) {
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm}.coach{text-align:left}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;border:1px solid #b7ff2a}.brand{text-align:center}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
   </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span></footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return;
