@@ -1,7 +1,6 @@
-import { browserLocalPersistence, onAuthStateChanged, setPersistence, signInWithCustomToken, signInWithPopup, signOut, type User } from 'firebase/auth'
+import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut, type User } from 'firebase/auth'
 import { get, onValue, ref } from 'firebase/database'
 import { firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
-import { memberPinApiUrl, normalizeIraqiPhone, validateMemberPin } from './memberAuth'
 
 export type AdminRole = 'SUPER_ADMIN' | 'MANAGER'
 export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string }
@@ -25,51 +24,20 @@ export function watchAuth(callback: (user: User | null) => void) {
 
 export async function signInAdmin() {
   if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
+  try {
+    return await signInWithPopup(firebaseAuth, googleProvider)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-blocked') {
+      return signInWithRedirect(firebaseAuth, googleProvider)
+    }
+    throw error
+  }
+}
+
+/** Google authentication is shared; authorization remains route-specific in RTDB rules. */
+export async function signInMember() {
+  if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
   return signInWithPopup(firebaseAuth, googleProvider)
-}
-
-export async function signInMemberWithPin(phone: string, pin: string) {
-  if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف إعدادات VITE_FIREBASE_* قبل تسجيل الدخول.')
-  if (!memberPinApiUrl) throw new Error('تسجيل الهاتف + PIN غير مفعّل: لم يتم ضبط خدمة التحقق الموثوقة.')
-  const normalizedPhone = normalizeIraqiPhone(phone)
-  if (!validateMemberPin(pin)) throw new Error('رمز الدخول يجب أن يتكون من 4 أرقام')
-  const response = await fetch(`${memberPinApiUrl}/v1/member/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ phone: normalizedPhone, pin }),
-  })
-  if (!response.ok) throw new Error(response.status === 429 ? 'محاولات كثيرة. حاول لاحقاً.' : 'تعذر تسجيل الدخول بالبيانات المدخلة')
-  const payload = await response.json() as { customToken?: unknown }
-  if (typeof payload.customToken !== 'string' || !payload.customToken) throw new Error('استجابة خدمة الدخول غير صالحة')
-  await setPersistence(firebaseAuth, browserLocalPersistence)
-  return signInWithCustomToken(firebaseAuth, payload.customToken)
-}
-
-export async function issueMemberPin(input: { phone: string; membershipId: string; memberId: string; reset?: boolean }) {
-  if (!memberPinApiUrl) throw new Error('إصدار PIN غير مفعّل: لم يتم ضبط خدمة التحقق الموثوقة.')
-  if (!firebaseAuth?.currentUser) throw new Error('يجب تسجيل دخول المدير أولاً')
-  const token = await firebaseAuth.currentUser.getIdToken()
-  const response = await fetch(`${memberPinApiUrl}/v1/admin/member-pin`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ ...input, phone: normalizeIraqiPhone(input.phone) }),
-  })
-  if (!response.ok) throw new Error('تعذر إصدار PIN من الخدمة الموثوقة')
-  const payload = await response.json() as { pin?: unknown }
-  if (typeof payload.pin !== 'string' || !validateMemberPin(payload.pin)) throw new Error('استجابة إصدار PIN غير صالحة')
-  return payload.pin
-}
-
-export async function setMemberLoginEnabled(memberId: string, enabled: boolean) {
-  if (!memberPinApiUrl) throw new Error('إدارة دخول الهاتف غير مفعّلة: لم يتم ضبط خدمة التحقق الموثوقة.')
-  if (!firebaseAuth?.currentUser) throw new Error('يجب تسجيل دخول المدير أولاً')
-  const token = await firebaseAuth.currentUser.getIdToken()
-  const response = await fetch(`${memberPinApiUrl}/v1/admin/member-disable`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ memberId, enabled }),
-  })
-  if (!response.ok) throw new Error('تعذر تغيير حالة دخول المشترك')
 }
 
 export async function signOutUser() {
@@ -106,4 +74,3 @@ export function watchAdminRecord(uid: string, callback: (record: AdminRecord | n
 export function authStatusLabel() {
   return firebaseConfigured ? 'Firebase متصل — بانتظار التحقق' : 'Firebase غير مهيأ محلياً'
 }
-

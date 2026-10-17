@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS member_credentials (
+-- Reference schema for the existing AL ASAS FIT PIN D1 database.
+-- This documents the verified shape; it is not an automatic migration.
+CREATE TABLE member_credentials (
   credential_id TEXT PRIMARY KEY,
   member_id TEXT NOT NULL UNIQUE,
   firebase_uid TEXT NOT NULL UNIQUE,
@@ -18,12 +20,22 @@ CREATE TABLE IF NOT EXISTS member_credentials (
   last_login_at TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_member_credentials_phone ON member_credentials(phone_e164);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_member_credentials_membership ON member_credentials(membership_id);
-CREATE TABLE IF NOT EXISTS pin_attempt_buckets (
+CREATE TABLE pin_attempt_buckets (
   bucket_key TEXT PRIMARY KEY,
   failure_count INTEGER NOT NULL DEFAULT 0,
   locked_until INTEGER,
-  updated_at INTEGER NOT NULL
+  updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_pin_attempt_buckets_lock ON pin_attempt_buckets(locked_until);
+
+CREATE TABLE member_sessions (
+  session_id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  token_hash BLOB NOT NULL UNIQUE,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+
+CREATE INDEX member_sessions_member_idx ON member_sessions(member_id);
+CREATE INDEX member_sessions_expiry_idx ON member_sessions(expires_at);

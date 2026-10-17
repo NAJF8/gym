@@ -20,7 +20,7 @@ npm run dev
 ## حالة التكامل الآمن
 
 - `/admin/` محمي برمجياً: لا تظهر بيانات الإدارة قبل Google Auth ثم قراءة `admins/{uid}` الفعالة.
-- `/` يقبل رقم الهاتف ورمز PIN رباعي فقط عبر Member Auth Worker موثوق؛ لا يوجد Google في بوابة المشترك. Google محصور في `/admin/`.
+- `/` يستخدم خدمة PIN موثوقة اختيارية عبر `VITE_PIN_SERVICE_ENDPOINT`؛ إذا لم يُضبط العنوان يبقى المسار متوقفاً fail-closed.
 - قواعد RTDB موجودة في `database.rules.json` ومغلقة افتراضياً. لا تُنشر قبل تشغيل Emulator Rules Tests ومراجعة bootstrap للـ Super Admin.
 - Bootstrap الأول يتم خارج المتصفح عبر `functions/scripts/bootstrap-super-admin.mjs` باستخدام UID وEmail محددين وService Account من متغيرات بيئية؛ يتحقق من Firebase Auth والـ email الموثق ومشروع `gym1-4f1bb`، ويرفض التشغيل ما لم يُضبط `ALASAS_BOOTSTRAP_APPROVED=true` صراحة، كما يرفض أي `admins` موجودة.
 - `addManagerByEmail` محفوظ ككود غير منشور مؤقتاً فقط؛ واجهة Production لا تستدعيه لأن Cloud Functions غير منشورة على Spark. أي تنفيذ له يحتاج خدمة إدارية موثوقة خارج المتصفح، تتحقق من UID الحقيقي بعد Google Auth، وتمنع self-promotion وتعديل SUPER_ADMIN.
@@ -33,9 +33,10 @@ npm run dev
 
 ### خطة دخول المشترك الآمن
 
-- لا تُعلن الواجهة نجاح إصدار PIN إلا بعد استجابة Worker؛ عند الفشل تبقى العضوية محفوظة ويظهر مسار إعادة المحاولة.
-- PIN لا يُخزن في RTDB أو المتصفح: Worker يخزن hash مع salt وpepper في D1، ويصدر Firebase Custom Token قصير العمر بعد التحقق.
-- ينشئ المدير سجل المشترك داخلياً، ثم تربط Cloud Function موثوقة رقم الهاتف الموثق بـ UID الموثق فقط بعد تحقق الخادم من الدعوة؛ لا يسمح العميل بإنشاء `membersByUid` أو تغيير `uid`.
+- حالة بوابة `/` تبقى `BLOCKED` إلى أن يعتمد المستخدم طريقة الدخول.
+- يصدر Worker الموجود في `worker/` PIN عشوائياً من 4 أرقام، ويحفظ في D1 فقط salt واشتقاق PBKDF2-SHA-256، ويقفل التخمين بعد 5 محاولات لمدة 15 دقيقة.
+- ينشئ المدير سجل المشترك، ثم يطلب الإصدار من `/v1/admin/member-pin` بعد تحقق Google/UID والصلاحية عبر Firebase. تسجيل الدخول والـ`me` وتسجيل الخروج تستخدم `/v1/member/*`. لا يكتب العميل PIN أو `membersByUid`.
+- يعيد `/v1/member/login` ملف المشترك المطابق للهاتف فقط بعد نجاح التحقق الخادمي؛ يعزل العضويات ولا يعرض `authUid` للمشترك.
 - تبقى قواعد RTDB معتمدة على `auth.uid` و`active`، ولا يُعاد أي برنامج قبل نجاح Auth وقراءة السجل المخصص لذلك UID. لا نفعّل إنشاء الحسابات قبل اعتماد هذا التدفق واختباره على Emulator.
 
 ### خطة صور التمارين العامة
@@ -43,6 +44,11 @@ npm run dev
 - ترفع الصور العامة فقط إلى مجلد مضبوط داخل GitHub عبر مراجعة Pull Request أو Workflow يدوي بصلاحية `contents: write` عند الحاجة، مع allowlist للامتدادات والحجم ومنع الملفات الشخصية.
 - لا يوضع GitHub Token أو `GITHUB_TOKEN` داخل الواجهة أو أي `VITE_*`. يخزن RTDB رابط HTTPS العام فقط، وتُراجع الروابط محلياً قبل استخدامها.
 - لا يوجد في هذه المرحلة Workflow رفع صور مفعّل، ولا تم نشر صورة حقيقية؛ لذلك تبقى `GITHUB_IMAGES` بحالة `BLOCKED`.
+
+### حالة PIN الحالية
+
+- الإصلاح المحلي واختبارات Emulator وcrypto نجحت، لكن Worker غير منشور، و`VITE_PIN_SERVICE_ENDPOINT` غير مضبوط، ولم يُتحقق من أسرار Cloudflare أو Firebase الإنتاجية.
+- لا تنفذ `wrangler deploy` أو تنشئ D1 أو تضع service-account secrets قبل موافقة مستقلة وفحص إنتاجي/نسخة احتياطية مناسبين.
 
 ### تشغيل Emulator محلياً
 
