@@ -23,6 +23,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Run release security tests
+        run: npm run test:pin && npm run test:video && npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
       - name: Build production bundle
         env:
           VITE_BASE_PATH: /

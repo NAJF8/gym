@@ -13,9 +13,9 @@ export type MemberPinProfile = {
   phone?: string
 }
 
-// The Worker contract is versioned and identical across environments.
-// Local builds stay fail-closed unless an endpoint is explicitly supplied.
-const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || (import.meta.env.PROD ? 'https://alasas-fit-member-auth.coffee101.workers.dev' : '')).replace(/\/+$/, '')
+// The Worker endpoint is always injected by the selected deployment environment.
+// There is deliberately no production fallback: a missing value must fail closed.
+const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || '').replace(/\/+$/, '')
 export const pinServiceConfigured = /^https:\/\//i.test(endpoint) || /^http:\/\/localhost(?::\d+)?$/i.test(endpoint)
 
 function requireEndpoint() {
