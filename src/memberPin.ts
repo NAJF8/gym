@@ -1,4 +1,5 @@
 import { firebaseAuth } from './firebase'
+import { normalizeIraqiPhone } from './phone'
 
 export type MemberPinProfile = {
   id: string
@@ -13,9 +14,9 @@ export type MemberPinProfile = {
   phone?: string
 }
 
-// The Worker contract is versioned and identical across environments.
-// Local builds stay fail-closed unless an endpoint is explicitly supplied.
-const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || (import.meta.env.PROD ? 'https://alasas-fit-member-auth.coffee101.workers.dev' : '')).replace(/\/+$/, '')
+// The endpoint is injected by the chosen environment. A missing value must
+// fail closed; Staging must never fall back to a Production Worker.
+const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || '').replace(/\/+$/, '')
 export const pinServiceConfigured = /^https:\/\//i.test(endpoint) || /^http:\/\/localhost(?::\d+)?$/i.test(endpoint)
 
 function requireEndpoint() {
@@ -43,23 +44,53 @@ async function request<T>(path: string, init: RequestInit = {}) {
   return body as T
 }
 
+async function requireAdminJson<T>(path: string, body: unknown, idempotencyKey: string) {
+  const token = await requireFreshAdminToken()
+  return request<T>(path, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'idempotency-key': idempotencyKey },
+    body: JSON.stringify(body),
+  })
+}
+
+function newIdempotencyKey() {
+  return `member-${crypto.randomUUID()}`
+}
+
 export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = true) {
-  if (!phone.trim()) throw new Error('أدخل رقم هاتف المشترك أولاً')
+  const normalizedPhone = normalizeIraqiPhone(phone)
   const token = await requireFreshAdminToken()
   const result = await request<{ pin: string }>('/v1/admin/member-pin', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
-    body: JSON.stringify({ memberId, membershipId, phone, reset }),
+    body: JSON.stringify({ memberId, membershipId, phone: normalizedPhone, reset }),
   })
   if (!/^\d{4}$/.test(result.pin)) throw new Error('الخدمة أعادت PIN غير صالح')
   return result.pin
+}
+
+export async function saveMemberThroughWorker(member: Record<string, unknown>, operation: 'CREATE' | 'UPDATE') {
+  const memberId = typeof member.id === 'string' ? member.id : ''
+  if (!memberId) throw new Error('المشترك غير صالح')
+  return requireAdminJson<{ ok: true; operation: string; memberId: string; state: string }>('/v1/admin/member', {
+    operation,
+    memberId,
+    member,
+  }, newIdempotencyKey())
+}
+
+export async function deleteMemberThroughWorker(memberId: string) {
+  return requireAdminJson<{ ok: true; operation: string; memberId: string; state: string }>('/v1/admin/member', {
+    operation: 'DELETE',
+    memberId,
+  }, newIdempotencyKey())
 }
 
 export async function loginMemberWithPin(phone: string, pin: string) {
   if (!/^\d{4}$/.test(pin)) throw new Error('PIN يجب أن يتكون من 4 أرقام')
   const result = await request<{ member?: MemberPinProfile; sessionToken?: string; customToken?: string }>('/v1/member/login', {
     method: 'POST',
-    body: JSON.stringify({ phone, pin }),
+    body: JSON.stringify({ phone: normalizeIraqiPhone(phone), pin }),
   })
   if (result.member?.active === false) throw new Error('العضوية غير فعالة')
   if (!result.sessionToken && !result.customToken) throw new Error('جلسة المشترك غير صالحة')

@@ -172,7 +172,9 @@ export async function writeAdminData<T>(
     });
   };
   arrayUpdates("exercises");
-  arrayUpdates("members");
+  // Member records are written only through the authenticated Worker. Keeping
+  // them out of this generic RTDB writer prevents a client-side array replace
+  // from bypassing phone reservation, idempotency, and outbox recovery.
   arrayUpdates("courses");
 
   if (options.role === "SUPER_ADMIN") {

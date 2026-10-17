@@ -21,7 +21,7 @@
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
       },
       "members": {
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
+        ".write": false
       },
       "courses": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
@@ -49,6 +49,10 @@
         ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && auth.uid === $uid && data.child('active').val() === true",
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
       }
+    },
+    "memberPhoneIndex": {
+      ".read": false,
+      ".write": false
     }
   }
 }

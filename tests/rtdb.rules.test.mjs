@@ -134,14 +134,11 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   const secondSession = verifiedContext('manager').database()
   await assertSucceeds(set(ref(adminSession, 'appData/settings/gymName'), 'AL ASAS FIT'))
   await assertFails(set(ref(secondSession, 'appData/settings/gymName'), 'blocked'))
-  await assertSucceeds(set(ref(adminSession, 'appData/members/syncMarker'), { name: 'emulator-sync-ok' }))
-  const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/members/syncMarker')))
-  assert.equal(snapshot.val().name, 'emulator-sync-ok')
+  await assertFails(set(ref(adminSession, 'appData/members/syncMarker'), { name: 'blocked-direct-member-write' }))
 })
 
-test('member creation and program update sync between two authorized sessions', async () => {
+test('direct client member creation and phone-index writes are blocked', async () => {
   const firstSession = verifiedContext('super').database()
-  const secondSession = verifiedContext('manager').database()
   const member = {
     id: 'synthetic-member-001',
     name: 'مشترك اختباري',
@@ -149,14 +146,8 @@ test('member creation and program update sync between two authorized sessions', 
     days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '10' }] }],
   }
 
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001'), member))
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001/days/0/exercises/0/reps'), '12'))
-
-  const synced = await assertSucceeds(get(ref(secondSession, 'appData/members/synthetic-member-001')))
-  assert.deepEqual(synced.val(), {
-    ...member,
-    days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '12' }] }],
-  })
+  await assertFails(set(ref(firstSession, 'appData/members/synthetic-member-001'), member))
+  await assertFails(set(ref(firstSession, 'memberPhoneIndex/%2B9647000000000'), 'synthetic-member-001'))
 
   const unauthorizedSession = verifiedContext('memberA').database()
   await assertFails(get(ref(unauthorizedSession, 'appData/members/synthetic-member-001')))

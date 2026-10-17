@@ -10,6 +10,9 @@ interface Env {
   CORS_ORIGINS?: string;
 }
 
+type MemberRecord = Record<string, unknown>;
+type MemberOperation = "CREATE" | "UPDATE" | "DELETE";
+
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", ...headers } });
 
@@ -53,6 +56,24 @@ async function firebaseGet(env: Env, path: string, accessToken: string) {
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
+}
+
+async function firebaseGetWithEtag(env: Env, path: string, accessToken: string) {
+  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}`, "X-Firebase-ETag": "true" } });
+  if (!response.ok) throw new Error("Firebase read failed");
+  return { value: await response.json(), etag: response.headers.get("ETag") || "null_etag" };
+}
+
+async function firebasePutWithEtag(env: Env, path: string, value: unknown, accessToken: string, etag: string) {
+  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${accessToken}`, "If-Match": etag, "content-type": "application/json" },
+    body: JSON.stringify(value),
+  });
+  if (response.status === 412) throw new Error("RTDB_CONFLICT");
+  if (!response.ok) throw new Error("Firebase write failed");
 }
 
 async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
@@ -164,14 +185,128 @@ async function issuePin(env: Env, request: Request) {
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   const { member } = await readMember(env, body.memberId);
   const phone = normalizePhone(body.phone ?? member.phone);
+  const memberPhone = normalizePhone(member.phone);
+  if (phone !== memberPhone) throw new Error("PHONE_MEMBER_MISMATCH");
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
   const pin = randomPin();
   const credential = await hashPin(pin);
   const now = Date.now();
   const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
   const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
+  await env.PIN_DB.prepare("INSERT INTO member_phone_reservations (phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, 'READY', ?, ?) ON CONFLICT(phone_e164) DO NOTHING").bind(phone, body.memberId, `legacy-pin-${body.memberId}-${phone}`, Date.now(), Date.now()).run();
+  const reservation = await env.PIN_DB.prepare("SELECT member_id, state FROM member_phone_reservations WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; state: string }>();
+  if (!reservation || reservation.member_id !== body.memberId || reservation.state !== "READY") throw new Error("MEMBER_SYNC_PENDING");
+  const owner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string }>();
+  if (owner && owner.member_id !== body.memberId) throw new Error("PHONE_CONFLICT");
   await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at").bind(crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
   return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
+}
+
+function operationKey(request: Request) {
+  const key = request.headers.get("idempotency-key")?.trim() || "";
+  if (!/^[A-Za-z0-9._:-]{16,160}$/.test(key)) throw new Error("IDEMPOTENCY_KEY_REQUIRED");
+  return key;
+}
+
+async function sha256Text(value: string) {
+  return encodeBase64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+}
+
+function memberIdFrom(value: unknown) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,96}$/.test(value.trim())) throw new Error("MEMBER_ID_INVALID");
+  return value.trim();
+}
+
+function operationFrom(value: unknown): MemberOperation {
+  if (value === "CREATE" || value === "UPDATE" || value === "DELETE") return value;
+  throw new Error("MEMBER_OPERATION_INVALID");
+}
+
+function memberPayload(value: unknown, memberId: string, operation: MemberOperation): MemberRecord | null {
+  if (operation === "DELETE") return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("MEMBER_PAYLOAD_INVALID");
+  const raw = value as MemberRecord;
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name || name.length > 160) throw new Error("MEMBER_NAME_INVALID");
+  const phone = raw.phone == null || raw.phone === "" ? undefined : normalizePhone(raw.phone);
+  return { ...raw, id: memberId, name, ...(phone ? { phone } : {}), active: raw.active !== false };
+}
+
+async function findIdempotency(env: Env, key: string, actor: string, requestHash: string) {
+  const row = await env.PIN_DB.prepare("SELECT actor_uid, request_hash, status, response_json FROM member_idempotency WHERE operation_key = ?").bind(key).first<{ actor_uid: string; request_hash: string; status: string; response_json: string | null }>();
+  if (!row) return null;
+  if (row.actor_uid !== actor || row.request_hash !== requestHash) throw new Error("IDEMPOTENCY_KEY_REUSE");
+  if (row.status === "COMPLETED" && row.response_json) return JSON.parse(row.response_json) as Record<string, unknown>;
+  return { pending: true };
+}
+
+async function syncMemberOutbox(env: Env, operationKeyValue: string, memberId: string, operation: MemberOperation, payload: MemberRecord | null) {
+  const token = await serviceAccessToken(env);
+  const current = await firebaseGetWithEtag(env, "appData/members", token);
+  const members = Array.isArray(current.value) ? [...current.value] as MemberRecord[] : [];
+  const index = members.findIndex(item => item && item.id === memberId);
+  if (operation === "CREATE" && index >= 0) throw new Error("MEMBER_ALREADY_EXISTS");
+  if (operation === "UPDATE" && index < 0) throw new Error("MEMBER_NOT_FOUND");
+  if (operation === "DELETE" && index < 0) return;
+  if (operation === "DELETE") members.splice(index, 1);
+  else if (index < 0) members.push(payload as MemberRecord);
+  else members[index] = payload as MemberRecord;
+  await firebasePutWithEtag(env, "appData/members", members, token, current.etag);
+  await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'SYNCED', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE operation_key = ?").bind(Date.now(), operationKeyValue).run();
+  await env.PIN_DB.prepare("UPDATE member_phone_reservations SET state = CASE WHEN ? = 'DELETE' THEN 'RELEASED' ELSE 'READY' END, updated_at = ? WHERE member_id = ?").bind(operation, Date.now(), memberId).run();
+}
+
+async function memberOperation(env: Env, request: Request) {
+  const actor = await verifyAdmin(env, request);
+  const key = operationKey(request);
+  const body = await request.json() as { operation?: unknown; memberId?: unknown; member?: unknown };
+  const operation = operationFrom(body.operation);
+  const memberId = memberIdFrom(body.memberId);
+  let requestedMember = body.member;
+  if (operation === "UPDATE" && requestedMember && typeof requestedMember === "object" && !Array.isArray(requestedMember) && (requestedMember as MemberRecord).phone == null) {
+    const current = await readMember(env, memberId);
+    requestedMember = { ...current.member, ...(requestedMember as MemberRecord) };
+  }
+  const payload = memberPayload(requestedMember, memberId, operation);
+  const requestHash = await sha256Text(JSON.stringify({ operation, memberId, member: payload }));
+  const replay = await findIdempotency(env, key, actor, requestHash);
+  if (replay && !replay.pending) return json(replay, 200, cors(env, request.headers.get("origin") || ""));
+
+  const now = Date.now();
+  const phone = payload?.phone as string | undefined;
+  const existing = operation === "UPDATE" ? await env.PIN_DB.prepare("SELECT phone_e164 FROM member_phone_reservations WHERE member_id = ? AND state != 'RELEASED'").bind(memberId).first<{ phone_e164: string }>() : null;
+  const reservationPhone = phone || existing?.phone_e164;
+  if (operation === "CREATE" && !reservationPhone) throw new Error("PHONE_REQUIRED");
+  if (reservationPhone) {
+    const owner = await env.PIN_DB.prepare("SELECT member_id FROM member_phone_reservations WHERE phone_e164 = ?").bind(reservationPhone).first<{ member_id: string }>();
+    if (owner && owner.member_id !== memberId) throw new Error("PHONE_CONFLICT");
+  }
+  if (!replay) {
+    await env.PIN_DB.prepare("INSERT OR IGNORE INTO member_idempotency (operation_key, actor_uid, request_hash, member_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'PENDING', ?, ?)").bind(key, actor, requestHash, memberId, now, now).run();
+    const claimed = await findIdempotency(env, key, actor, requestHash);
+    if (claimed && !claimed.pending) return json(claimed, 200, cors(env, request.headers.get("origin") || ""));
+    const reservationInsert = operation === "DELETE" || !reservationPhone ? null : env.PIN_DB.prepare("INSERT INTO member_phone_reservations (phone_e164, member_id, operation_key, state, created_at, updated_at) VALUES (?, ?, ?, 'PENDING_SYNC', ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164 = excluded.phone_e164, operation_key = excluded.operation_key, state = 'PENDING_SYNC', updated_at = excluded.updated_at").bind(reservationPhone, memberId, key, now, now);
+    const outbox = env.PIN_DB.prepare("INSERT OR IGNORE INTO member_outbox (outbox_id, operation_key, member_id, operation, payload_json, state, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)").bind(crypto.randomUUID(), key, memberId, operation, JSON.stringify(payload), now, now);
+    try {
+      await env.PIN_DB.batch([...(reservationInsert ? [reservationInsert] : []), outbox]);
+    } catch (error) {
+      await env.PIN_DB.prepare("DELETE FROM member_idempotency WHERE operation_key = ? AND status = 'PENDING'").bind(key).run();
+      throw error;
+    }
+  }
+  try {
+    if (operation === "DELETE") {
+      await syncMemberOutbox(env, key, memberId, operation, null);
+    } else {
+      await syncMemberOutbox(env, key, memberId, operation, payload);
+    }
+    const result = { ok: true, operation, memberId, state: "READY" };
+    await env.PIN_DB.prepare("UPDATE member_idempotency SET status = 'COMPLETED', response_json = ?, updated_at = ? WHERE operation_key = ?").bind(JSON.stringify(result), Date.now(), key).run();
+    return json(result, 200, cors(env, request.headers.get("origin") || ""));
+  } catch (error) {
+    await env.PIN_DB.prepare("UPDATE member_outbox SET state = 'FAILED', attempts = attempts + 1, last_error = ?, updated_at = ? WHERE operation_key = ?").bind(error instanceof Error ? error.message : "SYNC_FAILED", Date.now(), key).run();
+    throw error;
+  }
 }
 
 async function memberLogin(env: Env, request: Request) {
@@ -190,10 +325,12 @@ async function memberLogin(env: Env, request: Request) {
   if (row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
   const actual = await derivePin(body.pin, storedBytes(row.pin_salt));
   if (!constantTimeEqual(actual, storedBytes(row.pin_hash))) {
-    const attempts = row.failure_count + 1;
-    await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = ?, locked_until = ?, updated_at = ? WHERE member_id = ?").bind(attempts, attempts >= 5 ? now + 15 * 60_000 : null, new Date(now).toISOString(), row.member_id).run();
+    const update = await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row.member_id, now).run();
+    const current = await env.PIN_DB.prepare("SELECT failure_count, locked_until FROM member_credentials WHERE member_id = ?").bind(row.member_id).first<{ failure_count: number; locked_until: number | null }>();
+    const changes = Number(update.meta?.changes || 0);
+    const locked = (current?.locked_until ?? 0) > now || (current?.failure_count ?? 0) >= 5;
     await recordRateFailure(env, keys, now);
-    return json({ error: "بيانات الدخول غير صحيحة" }, attempts >= 5 ? 429 : 401, cors(env, request.headers.get("origin") || ""));
+    return json({ error: "بيانات الدخول غير صحيحة" }, changes === 0 || locked ? 429 : 401, cors(env, request.headers.get("origin") || ""));
   }
   const { member, appData } = await readMember(env, row.member_id);
   if (member.active === false) return json({ error: "العضوية غير فعالة" }, 403, cors(env, request.headers.get("origin") || ""));
@@ -223,6 +360,7 @@ export default {
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
+      if (url.pathname === "/v1/admin/member") return await memberOperation(env, request);
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
