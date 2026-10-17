@@ -1,0 +1,79 @@
+name: AL ASAS FIT Release CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [codex/al-asas-fit-final-release]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run test:pin
+      - run: npm run test:video
+      - run: npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
+      - run: npm audit --omit=dev --audit-level=high
+
+  build-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build staging with identity preflight
+        env:
+          VITE_BASE_PATH: /
+          VITE_RELEASE_ENVIRONMENT: staging
+          VITE_RELEASE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_DATABASE_URL: ${{ vars.VITE_FIREBASE_DATABASE_URL }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+          VITE_PIN_SERVICE_ENDPOINT: ${{ vars.VITE_PIN_SERVICE_ENDPOINT }}
+        run: npm run build:staging
+
+  build-production:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build production with identity preflight
+        env:
+          VITE_BASE_PATH: /
+          VITE_RELEASE_ENVIRONMENT: production
+          VITE_RELEASE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_DATABASE_URL: ${{ vars.VITE_FIREBASE_DATABASE_URL }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+          VITE_PIN_SERVICE_ENDPOINT: ${{ vars.VITE_PIN_SERVICE_ENDPOINT }}
+        run: npm run build:production
