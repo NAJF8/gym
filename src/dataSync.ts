@@ -342,14 +342,14 @@ export async function writeAdminData<T>(
           currentIndexes.set((member as { id: string }).id, index);
       });
     }
+    const existingKeys = collectionEntries(currentMembers).map(([key]) => Number(key)).filter(Number.isFinite);
+    let nextMemberIndex = existingKeys.length ? Math.max(...existingKeys) + 1 : 0;
     const nextMembers = appData.members as Array<Record<string, unknown>>;
     for (const member of nextMembers) {
       if (!member || typeof member.id !== "string") continue;
       const index = currentIndexes.get(member.id);
-      const existingKeys = collectionEntries(currentMembers).map(([key]) => Number(key)).filter(Number.isFinite);
-      const nextIndex = existingKeys.length ? Math.max(...existingKeys) + 1 : 0;
       const path = index === undefined
-        ? `appData/members/${nextIndex}`
+        ? `appData/members/${nextMemberIndex++}`
         : `appData/members/${index}`;
       const current = index === undefined ? undefined : (currentMembers as Record<string, unknown>)[index];
       if (!same(member, current)) updates[path] = stripUndefined(member);
