@@ -7,8 +7,6 @@ type E={id:number;name:string;muscle:string;sets:number;reps:string;weight:strin
 type C={id:number;name:string;days:{title:string;muscle:string;exercises:number[]}[]}
 export default function CoursePrint({course,members,exercises}:{course:C;members:M[];exercises:E[]}){
  const [memberId,setMemberId]=useState(members[0]?.id||0)
- const [photo,setPhoto]=useState('')
- const [logo,setLogo]=useState('')
  const [coach,setCoach]=useState('اسم الكابتن')
  const [gym,setGym]=useState('اسم القاعة')
  const [phone,setPhone]=useState('')
@@ -18,7 +16,9 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
  const [date,setDate]=useState(new Date().toISOString().slice(0,10))
  const [qr,setQr]=useState(false)
  const member=members.find(m=>m.id===memberId)
- function file(set:(v:string)=>void,f?:File){if(!f)return;if(!f.type.startsWith('image/'))return alert('اختَر ملف صورة');if(f.size>1500000)return alert('حجم الصورة يجب ألا يتجاوز 1.5 MB');const reader=new FileReader();reader.onload=()=>set(String(reader.result||''));reader.readAsDataURL(f)}
+ const coachPhoto=`${import.meta.env.BASE_URL}assets/coach.webp`
+ const hallPhoto=`${import.meta.env.BASE_URL}assets/hall.svg`
+ const logo=`${import.meta.env.BASE_URL}assets/logo.webp`
  return <div className="print-feature">
   <div className="print-controls">
    <div className="section-title"><div><h3>تصميم وطباعة الكورس</h3><p>نموذج A4 مشابه للورقة المرجعية، قابل للتخصيص قبل الطباعة.</p></div><button className="primary-btn" onClick={()=>window.print()}>طباعة A4 / حفظ PDF</button></div>
@@ -30,16 +30,15 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
     <label>الهاتف<input value={phone} onChange={e=>setPhone(e.target.value)}/></label>
     <label>إنستغرام<input value={instagram} onChange={e=>setInstagram(e.target.value)}/></label>
     <label>العنوان<input value={address} onChange={e=>setAddress(e.target.value)}/></label>
-    <label>صورة الكابتن<input type="file" accept="image/*" onChange={e=>file(setPhoto,e.target.files?.[0])}/></label>
-    <label>شعار القاعة<input type="file" accept="image/*" onChange={e=>file(setLogo,e.target.files?.[0])}/></label>
+    <p className="print-static-assets">صور الكابتن والقاعة ثابتة من Firebase Hosting: {coachPhoto} و {hallPhoto}</p>
     <label className="print-notes">ملاحظات الكابتن<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="مثلاً: 15 دقيقة مشي بعد التمرين"/></label>
     <label className="print-checkbox"><input type="checkbox" checked={qr} onChange={e=>setQr(e.target.checked)}/> أضف QR لروابط الشرح (قد يزيد عدد صفحات الطباعة)</label>
    </div>
   </div>
-  <div className="print-sheet" dir="rtl">
+  <div className="print-sheet" dir="rtl" style={{backgroundImage:`linear-gradient(rgba(255,255,255,.94),rgba(255,255,255,.94)),url(${hallPhoto})`}}>
    <header className="sheet-header">
-    <div className="sheet-profile">{photo?<img src={photo} alt="صورة الكابتن"/>:<span>صورة الكابتن</span>}</div>
-    <div className="sheet-brand">{logo?<img src={logo} alt="شعار القاعة"/>:<div className="sheet-logo-placeholder">{gym}</div>}<strong>{coach}</strong></div>
+    <div className="sheet-profile"><img src={coachPhoto} alt="صورة كابتن افتراضية"/></div>
+    <div className="sheet-brand"><img src={logo} alt="شعار القاعة"/><strong>{gym}</strong><strong>{coach}</strong></div>
     <div className="sheet-person"><div><b>الاسم:</b> {member?.name||'—'}</div><div><b>التاريخ:</b> {date}</div><div><b>الوزن:</b> {member?.weight??'—'} كغم</div><div><b>الطول:</b> {member?.height??'—'} سم</div></div>
    </header>
    <div className="sheet-rule"/>
@@ -52,6 +51,6 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
    {notes&&<div className="sheet-notes"><b>ملاحظات الكابتن</b><p>{notes}</p></div>}
    <footer className="sheet-footer"><strong>{coach}</strong><span>{phone}</span><span>{instagram}</span><span>{address}</span></footer>
   </div>
-  <p className="print-help">هذه المعاينة تعمل محلياً في المتصفح. الصور والمدخلات هنا لا تُرفع إلى خادم، وتحتاج إعادة اختيار بعد تحديث الصفحة.</p>
+  <p className="print-help">الصور الثابتة لا تُرفع من المتصفح ولا تُحفظ في RTDB.</p>
  </div>
 }

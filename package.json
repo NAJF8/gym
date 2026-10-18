@@ -13,6 +13,7 @@
     "test": "npm run test:rules && npm run test:video && npm run test:pin",
     "test:video": "node --experimental-strip-types --test tests/video-url.test.mjs",
     "test:pin": "node --experimental-strip-types --test tests/pin-crypto.test.mjs tests/pin-lockout-concurrent.test.mjs tests/image-url.test.mjs",
+    "test:phone": "node --experimental-strip-types --test tests/phone-display.test.mjs",
     "test:rules": "node --test tests/rtdb.rules.test.mjs"
   },
   "dependencies": {

@@ -17,6 +17,9 @@ test("PIN derivation verifies without storing the raw PIN", async () => {
 
 test("phone and PIN input validation is strict", () => {
   assert.equal(normalizePhone("+964 782 123 4567"), "+9647821234567");
+  assert.equal(normalizePhone("07821234567"), "+9647821234567");
+  assert.equal(normalizePhone("٠٧٨٢١٢٣٤٥٦٧"), "+9647821234567");
+  assert.equal(normalizePhone("009647821234567"), "+9647821234567");
   assert.equal(isPin("0004"), true);
   assert.equal(isPin("123"), false);
   assert.throws(() => normalizePhone("not-a-phone"));
