@@ -290,6 +290,42 @@ const suggestedExercises: Exercise[] = [
   { id: "library-wrist-curl", name: "ثني المعصم", english: "Wrist Curl", muscle: muscles[7], sets: 3, reps: "12–15", rest: "60 ثانية" },
   { id: "library-standing-calf", name: "واقف سمانة", english: "Standing Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
   { id: "library-seated-calf", name: "جالس سمانة", english: "Seated Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-decline-press", name: "بنش برس مائل للأسفل", english: "Decline Barbell Press", muscle: muscles[0], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-incline-cable-fly", name: "تفتيح كيبل مائل", english: "Incline Cable Fly", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-pec-deck", name: "بك ديك", english: "Pec Deck Fly", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-chest-dips", name: "متوازي للصدر", english: "Chest Dips", muscle: muscles[0], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-pull-up", name: "عقلة", english: "Pull-Up", muscle: muscles[1], sets: 3, reps: "6–12", rest: "90 ثانية" },
+  { id: "library-chest-supported-row", name: "تجديف مدعوم للصدر", english: "Chest Supported Row", muscle: muscles[1], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-reverse-grip-pulldown", name: "سحب أمامي قبضة عكسية", english: "Reverse Grip Lat Pulldown", muscle: muscles[1], sets: 3, reps: "10–12", rest: "75 ثانية" },
+  { id: "library-back-extension", name: "تمديد الظهر", english: "Back Extension", muscle: muscles[1], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-bulgarian-split-squat", name: "سكوات بلغاري", english: "Bulgarian Split Squat", muscle: muscles[2], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-walking-lunge", name: "لانج مشي", english: "Walking Lunge", muscle: muscles[2], sets: 3, reps: "10–12", rest: "75 ثانية" },
+  { id: "library-hip-thrust", name: "هيب ثرست", english: "Barbell Hip Thrust", muscle: muscles[2], sets: 4, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-hack-squat", name: "هاك سكوات", english: "Hack Squat Machine", muscle: muscles[2], sets: 3, reps: "10–12", rest: "90 ثانية" },
+  { id: "library-front-squat", name: "فرونت سكوات", english: "Front Squat", muscle: muscles[2], sets: 3, reps: "6–10", rest: "120 ثانية" },
+  { id: "library-arnold-press", name: "أرنولد برس", english: "Arnold Press", muscle: muscles[3], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-upright-row", name: "تجديف عمودي", english: "Upright Row", muscle: muscles[3], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-cable-lateral-raise", name: "رفرفة جانبية كيبل", english: "Cable Lateral Raise", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-reverse-pec-deck", name: "بك ديك خلفي", english: "Reverse Pec Deck", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-cable-curl", name: "بايسبس كيبل", english: "Cable Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-incline-curl", name: "بايسبس دمبل مائل", english: "Incline Dumbbell Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-concentration-curl", name: "تركيز دمبل", english: "Concentration Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-triceps-dips", name: "متوازي ترايسبس", english: "Triceps Dips", muscle: muscles[5], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-rope-pushdown", name: "ترايسبس حبل", english: "Rope Pushdown", muscle: muscles[5], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-close-grip-press", name: "بنش قبضة ضيقة", english: "Close Grip Bench Press", muscle: muscles[5], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-cable-crunch", name: "كرنش كيبل", english: "Cable Crunch", muscle: muscles[6], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-russian-twist", name: "لف روسي", english: "Russian Twist", muscle: muscles[6], sets: 3, reps: "16–24", rest: "45 ثانية" },
+  { id: "library-ab-wheel", name: "عجلة البطن", english: "Ab Wheel Rollout", muscle: muscles[6], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-reverse-crunch", name: "كرنش عكسي", english: "Reverse Crunch", muscle: muscles[6], sets: 3, reps: "12–15", rest: "45 ثانية" },
+  { id: "library-reverse-wrist-curl", name: "ثني معصم عكسي", english: "Reverse Wrist Curl", muscle: muscles[7], sets: 3, reps: "12–15", rest: "45 ثانية" },
+  { id: "library-farmers-carry", name: "مشي المزارع", english: "Farmer Carry", muscle: muscles[7], sets: 3, reps: "30–45 ثانية", rest: "60 ثانية" },
+  { id: "library-calf-press", name: "سمانة على الليج برس", english: "Leg Press Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-donkey-calf", name: "سمانة حمار", english: "Donkey Calf Raise", muscle: muscles[8], sets: 3, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-treadmill-walk", name: "مشي جهاز", english: "Treadmill Walk", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
+  { id: "library-treadmill-run", name: "ركض جهاز", english: "Treadmill Run", muscle: muscles[9], sets: 1, reps: "10–20 دقيقة", rest: "—" },
+  { id: "library-stationary-bike", name: "دراجة ثابتة", english: "Stationary Bike", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
+  { id: "library-rowing-machine", name: "جهاز التجديف", english: "Rowing Machine", muscle: muscles[9], sets: 1, reps: "10–20 دقيقة", rest: "—" },
+  { id: "library-elliptical", name: "إليبتكال", english: "Elliptical Trainer", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
 ];
 const defaults: SettingsData = {
   coachName: "محمد عبدالرزاق",
@@ -454,16 +490,19 @@ function Button({
   onClick,
   secondary = false,
   icon,
+  disabled = false,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   secondary?: boolean;
   icon?: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       className={secondary ? "secondary-btn" : "primary-btn"}
       onClick={onClick}
+      disabled={disabled}
     >
       {icon}
       {children}
@@ -1945,6 +1984,15 @@ function Review({
     </div>
   );
 }
+function PhonePreview({ value }: { value: string }) {
+  if (!value.trim()) return <p className="phone-preview phone-preview-error" role="status">أدخل رقم هاتف عراقي لإصدار PIN بعد الحفظ.</p>;
+  try {
+    const canonical = normalizeIraqiPhone(value);
+    return <p className="phone-preview" role="status">سيُحفظ الرقم بصيغة موحّدة: <b dir="ltr">{canonical}</b></p>;
+  } catch {
+    return <p className="phone-preview phone-preview-error" role="alert">رقم الهاتف العراقي غير صالح. استخدم 07XXXXXXXXX أو +9647XXXXXXXXX.</p>;
+  }
+}
 function WizardActions({
   step,
   setStep,
@@ -2082,6 +2130,7 @@ function MemberWizard({
   const [height, setHeight] = useState(initial?.height || "");
   const [weight, setWeight] = useState(initial?.weight || "");
   const [validationError, setValidationError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
   const [muscle, setMuscle] = useState(muscles[0]);
@@ -2169,11 +2218,12 @@ function MemberWizard({
               />
             </label>
             <label>
-              رقم هاتف المشترك
+              رقم هاتف المشترك (مطلوب)
               <input
                 disabled={viewOnly}
                 inputMode="tel"
                 autoComplete="tel"
+                placeholder="0770 123 4567 أو +964 770 123 4567"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
@@ -2203,6 +2253,7 @@ function MemberWizard({
               Google لتسجيل المشتركين.
             </p>
           )}
+          {!viewOnly && <PhonePreview value={phone} />}
         </div>
       )}
       {step === 2 && (
@@ -2262,11 +2313,14 @@ function MemberWizard({
         )}
         {!viewOnly && step === 4 && (
           <Button
+            disabled={saving}
             onClick={async () => {
               try {
                 const normalizedMemberName = cleanMemberName(name);
-                const normalizedMemberPhone = phone.trim() ? normalizeIraqiPhone(phone) : "";
+                if (!phone.trim()) throw new Error("رقم هاتف المشترك مطلوب قبل الحفظ");
+                const normalizedMemberPhone = normalizeIraqiPhone(phone);
                 setValidationError("");
+                setSaving(true);
                 await onSave({
                   id: initial?.id || uid(),
                   membershipId: membershipId.trim(),
@@ -2274,21 +2328,21 @@ function MemberWizard({
                   height,
                   weight,
                   createdAt: initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
-                  ...(normalizedMemberPhone ? {
-                    phoneE164: normalizedMemberPhone,
-                    phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
-                  } : {}),
+                  phoneE164: normalizedMemberPhone,
+                  phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
                   days: cloneDays(selected.slice(0, days)),
                   active,
                   ...(authUid.trim() ? { authUid: authUid.trim() } : {}),
                 });
               } catch (error) {
                 setValidationError(error instanceof Error ? error.message : "بيانات المشترك غير صالحة");
+              } finally {
+                setSaving(false);
               }
             }}
             icon={<Check size={16} />}
           >
-            حفظ
+            {saving ? "جارٍ حفظ Firebase…" : "حفظ المشترك والكورس"}
           </Button>
         )}
         {validationError && <p className="auth-error" role="alert">{validationError}</p>}

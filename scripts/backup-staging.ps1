@@ -42,7 +42,7 @@ $manifest = [ordered]@{
   rootKeys = @($data.psobject.Properties.Name)
   memberCount = Get-NodeCount $data.appData.members
   keyedMemberCount = Get-NodeCount $data.appData.membersById
-  tombstoneCount = Get-NodeCount $data.deletedMemberIds
+  tombstoneCount = Get-NodeCount $data.appData.deletedMemberIds
   courseCount = Get-NodeCount $data.appData.courses
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 5

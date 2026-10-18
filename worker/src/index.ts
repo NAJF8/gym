@@ -342,7 +342,9 @@ async function issuePin(env: Env, request: Request) {
   const body = await request.json() as { memberId?: unknown; phone?: unknown };
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   const { member } = await readMember(env, body.memberId);
-  const phone = normalizePhone(body.phone ?? member.phoneE164 ?? member.phoneDisplay ?? member.phone);
+  const storedPhone = normalizePhone(member.phoneE164 ?? member.phoneDisplay ?? member.phone);
+  const phone = normalizePhone(body.phone ?? storedPhone);
+  if (phone !== storedPhone) throw new Error("MEMBER_PHONE_MISMATCH");
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
   const pin = randomPin();
   const credential = await hashPin(pin);
