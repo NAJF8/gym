@@ -1,5 +1,6 @@
 import { Component, StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   Activity,
@@ -870,22 +871,17 @@ function App({
         />
       ) : (
         <>
-          <div
-            className={open ? "sidebar-wrap open" : "sidebar-wrap"}
-            onClick={() => setOpen(false)}
-          >
-            <div onClick={(e) => e.stopPropagation()}>
-              <Sidebar
-                page={page}
-                setPage={setPage}
-                s={settings}
-                role={role}
-                onSignOut={onSignOut}
-              />
-            </div>
-          </div>
+          {createPortal(
+            <div className={open ? "sidebar-wrap open" : "sidebar-wrap"} onClick={() => setOpen(false)}>
+              <div onClick={(e) => e.stopPropagation()}>
+                <Sidebar page={page} setPage={(next) => { setPage(next); setOpen(false); }} s={settings} role={role} onSignOut={onSignOut}/>
+              </div>
+              {open && <button type="button" className="sidebar-mobile-close" aria-label="إغلاق القائمة" onClick={() => setOpen(false)}><X size={21}/></button>}
+            </div>,
+            document.body
+          )}
           <div className="main-area">
-            <Topbar title={title} onMenu={() => setOpen(true)} />
+            <Topbar title={title} onMenu={() => setOpen((current) => !current)} />
             <main className="content">
               <CentralDataBridge
                 role={role}
@@ -986,24 +982,28 @@ function AdminGate() {
     );
   if (!user)
     return (
-      <AuthNotice
-        title="تسجيل دخول الإدارة"
-        text="الدخول متاح عبر Google فقط. لن تظهر أي بيانات قبل التحقق من UID وصلاحية فعالة في admins/{uid}."
-        action={async () => {
-          setBusy(true);
-          setError("");
-          try {
-            await signInAdmin();
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "تعذر تسجيل الدخول");
-          } finally {
-            setBusy(false);
-          }
-        }}
-        actionLabel={
-          busy ? "جارٍ تسجيل الدخول…" : error || "تسجيل الدخول بواسطة Google"
-        }
-      />
+      <main className="auth-page admin-login-page" dir="rtl">
+        <div className="admin-login-layout">
+          <aside className="admin-login-intro">
+            <Logo s={defaults}/>
+            <span className="admin-login-eyebrow">AL ASAS FIT / CONTROL CENTER</span>
+            <h1>كل تفاصيل القاعة،<br/><em>بمكان واحد.</em></h1>
+            <p>إدارة التمارين والمشتركين والكورسات بواجهة واضحة وسريعة ومخصصة للكابتن.</p>
+            <div className="admin-login-points"><span><Dumbbell size={18}/> مكتبة التمارين</span><span><Users size={18}/> إدارة المشتركين</span><span><QrCode size={18}/> باركود لكل تمرين</span></div>
+          </aside>
+          <section className="panel admin-login-card">
+            <span className="admin-login-lock"><Settings size={23}/></span>
+            <span className="admin-login-eyebrow">بوابة الإدارة الآمنة</span>
+            <h2>تسجيل دخول المدراء</h2>
+            <p>سجّل بحساب Google المخوّل لإدارة القاعة. صلاحيات الوصول تُفحص بعد تسجيل الدخول.</p>
+            <button type="button" className="admin-google-button" disabled={busy} onClick={async () => {setBusy(true);setError("");try{await signInAdmin()}catch(e){setError(e instanceof Error?e.message:"تعذر تسجيل الدخول")}finally{setBusy(false)}}}>
+              <span className="google-mark">G</span>{busy?"جارٍ تسجيل الدخول…":"المتابعة باستخدام Google"} <ArrowLeft size={18}/>
+            </button>
+            {error&&<p role="alert" className="auth-error">{error}</p>}
+            <div className="admin-login-note"><Check size={17}/> متاح للمدراء المصرّح لهم فقط</div>
+          </section>
+        </div>
+      </main>
     );
   if (!user.emailVerified || !record?.active)
     return (
