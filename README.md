@@ -23,8 +23,14 @@ npm run dev
 - `/` يستخدم خدمة PIN موثوقة اختيارية عبر `VITE_PIN_SERVICE_ENDPOINT`؛ إذا لم يُضبط العنوان يبقى المسار متوقفاً fail-closed.
 - قواعد RTDB موجودة في `database.rules.json` ومغلقة افتراضياً. لا تُنشر قبل تشغيل Emulator Rules Tests ومراجعة bootstrap للـ Super Admin.
 - Bootstrap الأول يتم خارج المتصفح عبر `functions/scripts/bootstrap-super-admin.mjs` باستخدام UID وEmail محددين وService Account من متغيرات بيئية؛ يتحقق من Firebase Auth والـ email الموثق ومشروع `gym1-4f1bb`، ويرفض التشغيل ما لم يُضبط `ALASAS_BOOTSTRAP_APPROVED=true` صراحة، كما يرفض أي `admins` موجودة.
-- `addManagerByEmail` محفوظ ككود غير منشور مؤقتاً فقط؛ واجهة Production لا تستدعيه لأن Cloud Functions غير منشورة على Spark. أي تنفيذ له يحتاج خدمة إدارية موثوقة خارج المتصفح، تتحقق من UID الحقيقي بعد Google Auth، وتمنع self-promotion وتعديل SUPER_ADMIN.
-- دعوة Manager عبر RTDB من المتصفح وحده لا تحقق ربط البريد بـ UID وحيداً بشكل موثوق ولا توفر تنفيذاً إدارياً ذرياً آمناً؛ لذلك يبقى المسار المعتمد: Google Auth للمستخدم الهدف ثم provisioning خارجي موثوق يكتب `admins/{uid}`، أو نشر Function بعد قرار منفصل وترقية الخطة. لا تُنشأ دعوة أو صلاحية من البريد وحده داخل الواجهة.
+- إدارة دعوات المدراء لا تكتب `admins/{uid}` من المتصفح. المسار المعتمد هو Worker/D1 المحلي أو المنشور المصرح به، مع تحقق Firebase ID Token والبريد الموثق وGoogle provider، ثم قبول idempotent عبر حالات الدعوة الموثقة أدناه.
+
+## Structural member storage and invitation cutover
+
+- The canonical member collection is `appData/membersById/{memberId}`. Each record carries a monotonic `version`; a stale write fails with `MEMBER_CONFLICT` instead of replacing the collection.
+- Deletions write `appData/deletedMemberIds/{memberId}` before removing the keyed record. The RTDB rules reject a later write for a tombstoned ID. The old `appData/members` array remains readable only as a migration source and is no longer writable.
+- Prepare a local migration with `node scripts/migrate-members-keyed.mjs input.json output.json`. Missing, invalid, and duplicate IDs fail explicitly. The script is idempotent; do not delete the legacy source until post-cutover verification and a separate rollback decision.
+- Admin invitations are canonical in the Worker D1 `admin_invitations` table. Acceptance uses `PENDING -> CLAIMED -> APPLIED`; RTDB writes are retried idempotently only for the same verified UID and exact role. Existing admin records, expired invites, replay, self-invitation, and Manager administration are rejected. `0000_initial_pin_schema.sql` makes fresh local D1 setup reproducible; apply migrations before starting a local Worker.
 - Google Provider وAuthorized Domains إعدادات Firebase Console خارج التغيير المحلي. قبل أي Bootstrap أو نشر يجب تسجيل دخول Google فعلي بالحسابين واستخراج UID من `User.uid`/Admin SDK، ثم توثيق قراءة Auth وRTDB الراجعة. لا تعتبر قيم البريد أو build دليلاً على UID أو Provider.
 - قواعد RTDB تشترط الآن `email_verified=true` و`firebase.sign_in_provider === 'google.com'` لمسارات الإدارة، مع منع كتابة `admins` من العميل.
 - Firestore مغلق حالياً (`allow read, write: if false`) لأن مخطط التطبيق الحالي يستخدم RTDB فقط.

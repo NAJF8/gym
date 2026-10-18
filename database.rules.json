@@ -21,9 +21,19 @@
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
       },
       "members": {
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
-        "$index": {
-          ".validate": "!newData.exists() || !newData.hasChild('id') || !root.child('deletedMemberIds').child(newData.child('id').val()).exists()"
+        ".write": false
+      },
+      "membersById": {
+        "$memberId": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+          ".validate": "!newData.exists() || (newData.hasChildren(['id', 'version']) && newData.child('id').val() === $memberId && newData.child('version').isNumber() && ((!data.exists() && newData.child('version').val() === 1) || (data.exists() && newData.child('version').val() === data.child('version').val() + 1)) && !root.child('appData').child('deletedMemberIds').child($memberId).exists())"
+        }
+      },
+      "deletedMemberIds": {
+        ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+        "$memberId": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+          ".validate": "newData.hasChildren(['deletedAt', 'version']) && newData.child('deletedAt').isString() && newData.child('version').isNumber()"
         }
       },
       "courses": {
@@ -58,14 +68,6 @@
       "$uid": {
         ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && auth.uid === $uid && data.child('active').val() === true",
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
-      }
-    },
-    "deletedMemberIds": {
-      ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
-      "$memberId": {
-        ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
-        ".validate": "newData.hasChildren(['deletedAt']) && newData.child('deletedAt').isString()"
       }
     }
   }

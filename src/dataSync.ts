@@ -1,7 +1,7 @@
 import { get, onValue, ref, runTransaction, update, type Unsubscribe } from "firebase/database";
 import { firebaseDatabase } from "./firebase";
 import { safeVideoUrl } from "./videoUrl";
-import { deletedMemberInPayload, filterDeletedMembers } from "./memberTombstones";
+import { keyedMembers, membersFromData, MEMBER_TOMBSTONES_PATH, MEMBERS_PATH, deleteMemberRecord, upsertMemberRecord } from "./memberStorage";
 
 export type FirebaseSyncPhase = "update" | "read" | "verify";
 
@@ -90,13 +90,11 @@ export function watchAdminData<T>(
 ): Unsubscribe | (() => undefined) {
   if (!firebaseDatabase) return () => undefined;
   let appData: T | null = null;
-  let deleted: Record<string, unknown> = {};
   let appLoaded = false;
   const publish = () => {
     if (!appLoaded) return;
     const value = appData as (T & { members?: unknown }) | null;
-    if (value)
-      callback({ ...value, members: filterDeletedMembers(collectionItems(value.members), deleted) } as T);
+    if (value) callback({ ...value, members: membersFromData(value) } as T);
     else callback(appData);
   };
   const stopApp = onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
@@ -104,11 +102,7 @@ export function watchAdminData<T>(
     appLoaded = true;
     publish();
   });
-  const stopDeleted = onValue(ref(firebaseDatabase, "deletedMemberIds"), (snapshot) => {
-    deleted = snapshot.exists() ? snapshot.val() as Record<string, unknown> : {};
-    publish();
-  });
-  return () => { stopApp(); stopDeleted(); };
+  return () => { stopApp(); };
 }
 
 export async function readAdminData<T>() {
@@ -117,9 +111,7 @@ export async function readAdminData<T>() {
     const snapshot = await get(ref(firebaseDatabase, "appData"));
     const value = snapshot.exists() ? snapshot.val() as T & { members?: unknown } : null;
     if (!value) return null;
-    const deletedSnapshot = await get(ref(firebaseDatabase, "deletedMemberIds"));
-    const deleted = deletedSnapshot.exists() ? deletedSnapshot.val() as Record<string, unknown> : {};
-    value.members = filterDeletedMembers(collectionItems(value.members), deleted);
+    value.members = membersFromData(value);
     return value as T;
   } catch (error) {
     throw new FirebaseSyncError("read", firebaseErrorCode(error), "تعذر قراءة Firebase RTDB");
@@ -131,49 +123,28 @@ export async function deleteAdminMember(memberId: string) {
   if (!firebaseDatabase) throw new FirebaseSyncError("update", "NOT_CONFIGURED", "Firebase RTDB غير مهيأ");
   if (!memberId) throw new FirebaseSyncError("update", "MEMBER_REQUIRED", "معرّف المشترك مطلوب");
   try {
-    const root = ref(firebaseDatabase);
     const snapshot = await get(ref(firebaseDatabase, "appData"));
-    const appData = snapshot.val() as { members?: unknown } | null;
-    const members = collectionItems(appData?.members);
+    const appData = snapshot.val() as { membersById?: unknown; members?: unknown } | null;
+    const members = membersFromData(appData);
     const member = members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as Record<string, unknown> | undefined;
-    const tombstoneSnapshot = await get(ref(firebaseDatabase, `deletedMemberIds/${memberId}`));
+    const tombstoneSnapshot = await get(ref(firebaseDatabase, `${MEMBER_TOMBSTONES_PATH}/${memberId}`));
     if (!member && !tombstoneSnapshot.exists()) throw new FirebaseSyncError("verify", "MEMBER_NOT_FOUND", "المشترك غير موجود في Firebase");
-    const deletedAt = new Date().toISOString();
-    const updates: Record<string, unknown> = {
-      [`deletedMemberIds/${memberId}`]: { deletedAt },
-    };
     const uid = typeof member?.authUid === "string" ? member.authUid : "";
-    if (uid) updates[`membersByUid/${uid}`] = null;
-    await update(root, updates);
+    await deleteMemberRecord(firebaseDatabase, memberId, member);
+    if (uid) await update(ref(firebaseDatabase), { [`membersByUid/${uid}`]: null });
 
-    // Serialize removal at the member's array index. A transaction on the
-    // whole legacy array validates unrelated tombstoned members and can fail
-    // during concurrent deletes; an index transaction preserves every other
-    // member and cannot resurrect this ID after the tombstone is written.
-    if (member) {
-      const memberEntry = collectionEntries(appData?.members).find(([, item]) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId);
-      if (memberEntry) {
-        const [memberIndex] = memberEntry;
-        const removal = await runTransaction(ref(firebaseDatabase, `appData/members/${memberIndex}`), (current) => {
-          if (current == null) return null;
-          if (current && typeof current === "object" && (current as { id?: unknown }).id === memberId) return null;
-          return;
-        });
-        if (!removal.committed) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
-      }
-    }
+    // The keyed record transaction above targets only this member and leaves
+    // unrelated records untouched.
 
     const phone = typeof member?.phoneE164 === "string" ? member.phoneE164 : typeof member?.phone === "string" ? member.phone : "";
     if (phone) await runTransaction(ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`), (current) => current === memberId ? null : current);
 
     const [membersCheck, profileCheck] = await Promise.all([
-      get(ref(firebaseDatabase, "appData/members")),
+      get(ref(firebaseDatabase, MEMBERS_PATH)),
       uid ? get(ref(firebaseDatabase, `membersByUid/${uid}`)) : Promise.resolve(null),
     ]);
     const persistedMembers = membersCheck.val();
-    const stillPresent = Array.isArray(persistedMembers)
-      ? persistedMembers.some((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId)
-      : Boolean(persistedMembers && typeof persistedMembers === "object" && Object.values(persistedMembers).some((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId));
+    const stillPresent = Boolean(keyedMembers(persistedMembers)[memberId]);
     if (stillPresent || profileCheck?.exists()) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
     return { member: member || null, memberId };
   } catch (error) {
@@ -192,13 +163,13 @@ export async function readAdminMember<T>(memberId: string) {
 export async function readAdminDeletionConflicts() {
   if (!firebaseDatabase) return [] as Array<{ id: string; member: Record<string, unknown>; deletedAt: string }>;
   const [membersSnapshot, tombstonesSnapshot] = await Promise.all([
-    get(ref(firebaseDatabase, "appData/members")),
-    get(ref(firebaseDatabase, "deletedMemberIds")),
+    get(ref(firebaseDatabase, MEMBERS_PATH)),
+    get(ref(firebaseDatabase, MEMBER_TOMBSTONES_PATH)),
   ]);
   const members = membersSnapshot.val();
   const tombstones = tombstonesSnapshot.val() as Record<string, { deletedAt?: unknown }> | null;
   if (!tombstones || typeof tombstones !== "object") return [];
-  return collectionItems(members).flatMap((member) => {
+  return Object.values(keyedMembers(members)).flatMap((member) => {
     if (!member || typeof member !== "object" || typeof (member as { id?: unknown }).id !== "string") return [];
     const id = (member as { id: string }).id;
     const tombstone = tombstones[id];
@@ -281,12 +252,6 @@ export async function writeAdminData<T>(
     courses?: unknown;
     migratedAt?: unknown;
   };
-  if (Array.isArray(appData.members)) {
-    const tombstones = await get(ref(firebaseDatabase, "deletedMemberIds"));
-    const deleted = tombstones.exists() ? tombstones.val() as Record<string, unknown> : {};
-    const resurrection = deletedMemberInPayload(appData.members as unknown[], deleted);
-    if (resurrection) throw firebaseSyncError("update", "MEMBER_DELETED", "لا يمكن إعادة إنشاء عضوية محذوفة؛ أنشئ عضوية جديدة بمعرّف مختلف");
-  }
   const previous = (options.previous && typeof options.previous === "object"
     ? options.previous
     : null) as {
@@ -329,31 +294,26 @@ export async function writeAdminData<T>(
   arrayUpdates("exercises");
   arrayUpdates("courses");
 
-  // Members are stored as a legacy array, but member writes must remain
-  // index-targeted. Replacing appData/members from a stale snapshot can
-  // resurrect a concurrently deleted member or discard another admin's write.
-  if (Array.isArray(appData.members)) {
-    const currentSnapshot = await get(ref(firebaseDatabase, "appData/members"));
-    const currentMembers = currentSnapshot.val();
-    const currentIndexes = new Map<string, string>();
-    if (currentMembers && typeof currentMembers === "object") {
-      collectionEntries(currentMembers).forEach(([index, member]) => {
-        if (member && typeof member === "object" && typeof (member as { id?: unknown }).id === "string")
-          currentIndexes.set((member as { id: string }).id, index);
-      });
+  const nextMembers = Array.isArray(appData.members) ? appData.members as Array<Record<string, unknown>> : [];
+  const oldMembers = Array.isArray(previous?.members) ? previous.members as Array<Record<string, unknown>> : [];
+  const memberMap = (members: Array<Record<string, unknown>>) => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const member of members) {
+      if (!member || typeof member.id !== "string" || !member.id.trim()) throw new Error("MEMBER_ID_REQUIRED");
+      if (map.has(member.id)) throw new Error("MEMBER_ID_DUPLICATE");
+      map.set(member.id, member);
     }
-    const existingKeys = collectionEntries(currentMembers).map(([key]) => Number(key)).filter(Number.isFinite);
-    let nextMemberIndex = existingKeys.length ? Math.max(...existingKeys) + 1 : 0;
-    const nextMembers = appData.members as Array<Record<string, unknown>>;
-    for (const member of nextMembers) {
-      if (!member || typeof member.id !== "string") continue;
-      const index = currentIndexes.get(member.id);
-      const path = index === undefined
-        ? `appData/members/${nextMemberIndex++}`
-        : `appData/members/${index}`;
-      const current = index === undefined ? undefined : (currentMembers as Record<string, unknown>)[index];
-      if (!same(member, current)) updates[path] = stripUndefined(member);
-    }
+    return map;
+  };
+  const nextMemberMap = memberMap(nextMembers);
+  const oldMemberMap = memberMap(oldMembers);
+  const memberOperations: Array<{ type: "upsert" | "delete"; id: string; member?: Record<string, unknown>; previous?: Record<string, unknown> }> = [];
+  for (const [id, member] of nextMemberMap) {
+    const old = oldMemberMap.get(id);
+    if (!old || !same(member, old)) memberOperations.push({ type: "upsert", id, member: stripUndefined(member), previous: old });
+  }
+  for (const [id, old] of oldMemberMap) {
+    if (!nextMemberMap.has(id)) memberOperations.push({ type: "delete", id, previous: old });
   }
 
   if (options.role === "SUPER_ADMIN") {
@@ -431,12 +391,6 @@ export async function writeAdminData<T>(
       days: member.days || [],
       active: member.active !== false,
     });
-  const nextMembers = Array.isArray(appData.members)
-    ? (appData.members as Array<Record<string, unknown>>)
-    : [];
-  const oldMembers = Array.isArray(previous?.members)
-    ? (previous.members as Array<Record<string, unknown>>)
-    : [];
   const oldProfiles = new Map(
     oldMembers
       .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
@@ -450,6 +404,10 @@ export async function writeAdminData<T>(
   }
 
   try {
+    for (const operation of memberOperations) {
+      if (operation.type === "upsert") await upsertMemberRecord(firebaseDatabase, operation.member!, operation.previous);
+      else await deleteMemberRecord(firebaseDatabase, operation.id, operation.previous);
+    }
     await update(ref(firebaseDatabase), { ...updates });
   } catch (error) {
     throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر تحديث Firebase RTDB");
