@@ -188,7 +188,8 @@ async function rateLimited(env: Env, keys: string[], now: number) {
 
 async function recordRateFailure(env: Env, keys: string[], now: number) {
   for (const key of keys) {
-    await env.PIN_DB.prepare("INSERT INTO pin_attempt_buckets (bucket_key, failure_count, locked_until, updated_at) VALUES (?, 1, NULL, ?) ON CONFLICT(bucket_key) DO UPDATE SET failure_count = pin_attempt_buckets.failure_count + 1, locked_until = CASE WHEN pin_attempt_buckets.failure_count + 1 >= 20 THEN ? ELSE pin_attempt_buckets.locked_until END, updated_at = excluded.updated_at").bind(key, new Date(now).toISOString(), now + 15 * 60_000).run();
+    const threshold = key.startsWith("account:") ? 5 : 20;
+    await env.PIN_DB.prepare("INSERT INTO pin_attempt_buckets (bucket_key, failure_count, locked_until, updated_at) VALUES (?, 1, NULL, ?) ON CONFLICT(bucket_key) DO UPDATE SET failure_count = pin_attempt_buckets.failure_count + 1, locked_until = CASE WHEN pin_attempt_buckets.failure_count + 1 >= ? THEN ? ELSE pin_attempt_buckets.locked_until END, updated_at = excluded.updated_at").bind(key, new Date(now).toISOString(), threshold, now + 15 * 60_000).run();
   }
 }
 
@@ -228,6 +229,7 @@ async function issuePin(env: Env, request: Request) {
   const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
   const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
   await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at").bind(crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
+  await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key IN (?, ?)").bind(`account:${body.memberId}`, `phone:${phone}`).run();
   return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
@@ -238,20 +240,21 @@ async function memberLogin(env: Env, request: Request) {
   try { phone = normalizePhone(body.phone); } catch { return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || "")); }
   const row = await env.PIN_DB.prepare("SELECT * FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; pin_salt: unknown; pin_hash: unknown; failure_count: number; locked_until: number | null; status: string }>();
   const now = Date.now();
-  const keys = [`account:${row?.member_id || `phone:${phone}`}`, `source:${requestSource(request)}`];
+  // Known accounts get a five-attempt bucket. Unknown phones share one
+  // bounded bucket so arbitrary probes cannot create unbounded D1 rows.
+  const keys = [row?.member_id ? `account:${row.member_id}` : "unknown:global", `source:${requestSource(request)}`];
   const limited = await rateLimited(env, keys, now);
   const salt = row ? storedBytes(row.pin_salt) : crypto.getRandomValues(new Uint8Array(16));
   const actual = await derivePin(body.pin, salt);
   const matches = Boolean(row && row.status === "ACTIVE" && (row.locked_until ?? 0) <= now && constantTimeEqual(actual, storedBytes(row.pin_hash)));
-  if (limited || !row || !matches) {
-    if (!row) {
-      await recordRateFailure(env, [`source:${requestSource(request)}`], now);
-      return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
-    }
-    if (limited || row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
-    // Increment and lock in one conditional SQL statement. A read followed by
-    // a stale read-modify-write lets concurrent guesses overwrite each other.
-    await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row.member_id, now).run();
+  if (limited) {
+    return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
+  }
+  if (!row || !matches) {
+    // Keep all failed attempts on the same D1 rate-limit path. The account
+    // bucket locks after five failures and the source bucket after twenty;
+    // this avoids a member-row write that would be measurably different for
+    // known phones while preserving both lockout boundaries.
     await recordRateFailure(env, keys, now);
     return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   }
