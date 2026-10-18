@@ -8,6 +8,11 @@ interface Env {
   FIREBASE_SERVICE_ACCOUNT_EMAIL?: string;
   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
   FIREBASE_SERVICE_ACCOUNT_JSON?: string;
+  LOCAL_EMULATOR_ONLY?: string;
+  FIREBASE_SERVICE_ACCESS_TOKEN?: string;
+  FIREBASE_IDENTITY_TOOLKIT_URL?: string;
+  FIREBASE_OAUTH_TOKEN_URL?: string;
+  FIREBASE_DATABASE_NAMESPACE?: string;
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
   AUTH_DIAGNOSTICS?: string;
@@ -39,6 +44,24 @@ function authDiagnostics(env: Env, values: { authorizationPresent: boolean; toke
   }));
 }
 
+function localEmulator(env: Env) {
+  return env.LOCAL_EMULATOR_ONLY === "true";
+}
+
+function identityToolkitLookupUrl(env: Env) {
+  return localEmulator(env) && env.FIREBASE_IDENTITY_TOOLKIT_URL
+    ? env.FIREBASE_IDENTITY_TOOLKIT_URL
+    : "https://identitytoolkit.googleapis.com/v1/accounts:lookup";
+}
+
+function firebaseUrl(env: Env, path: string, query = "") {
+  const base = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const localNamespace = localEmulator(env) && env.FIREBASE_DATABASE_NAMESPACE
+    ? `ns=${encodeURIComponent(env.FIREBASE_DATABASE_NAMESPACE)}`
+    : "";
+  return base + (localNamespace || query ? `?${[localNamespace, query].filter(Boolean).join("&")}` : "");
+}
+
 function cors(env: Env, requestOrigin = "") {
   const origins = allowedOrigins(env);
   const allowOrigin = requestOrigin && origins.includes(requestOrigin) ? requestOrigin : (origins[0] || "");
@@ -58,6 +81,7 @@ function pemToBytes(pem: string) {
 }
 
 async function serviceAccessToken(env: Env) {
+  if (localEmulator(env) && env.FIREBASE_SERVICE_ACCESS_TOKEN) return env.FIREBASE_SERVICE_ACCESS_TOKEN;
   const now = Math.floor(Date.now() / 1000);
   let serviceAccount: { client_email?: string; private_key?: string } = {};
   if (env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -70,7 +94,7 @@ async function serviceAccessToken(env: Env) {
   const claim = encodeBase64Url(JSON.stringify({ iss: serviceEmail, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
   const key = await crypto.subtle.importKey("pkcs8", pemToBytes(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(header + "." + claim));
-  const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
+  const response = await fetch(localEmulator(env) && env.FIREBASE_OAUTH_TOKEN_URL ? env.FIREBASE_OAUTH_TOKEN_URL : "https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
   if (!response.ok) throw new Error("Firebase service authentication failed");
   const body = await response.json() as { access_token?: string };
   if (!body.access_token) throw new Error("Firebase service token missing");
@@ -78,21 +102,21 @@ async function serviceAccessToken(env: Env) {
 }
 
 async function firebaseGet(env: Env, path: string, accessToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const url = firebaseUrl(env, path);
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
 }
 
 async function firebaseWrite(env: Env, path: string, value: unknown, accessToken: string, method: 'PUT' | 'PATCH' = 'PUT') {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, '') + '/' + path.replace(/^\//, '') + '.json';
+  const url = firebaseUrl(env, path);
   const response = await fetch(url, { method, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify(value) });
   if (!response.ok) throw new Error('Firebase write failed');
   return response.json();
 }
 
 async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json?auth=" + encodeURIComponent(idToken);
+  const url = firebaseUrl(env, path, "auth=" + encodeURIComponent(idToken));
   const response = await fetch(url);
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
@@ -105,7 +129,7 @@ async function verifyAdmin(env: Env, request: Request) {
     authDiagnostics(env, { authorizationPresent: Boolean(authorization), tokenAcquired: false, lookupHttpStatus: null, authFailureStage: authorization ? "bearer_missing" : "authorization_missing" });
     throw new Error("AUTH_REQUIRED:" + (authorization ? "bearer_missing" : "authorization_missing"));
   }
-  const lookup = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
+  const lookup = await fetch(identityToolkitLookupUrl(env) + "?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
   if (!lookup.ok) {
     let failureStage = "identity_lookup_failed";
     try {
@@ -136,7 +160,7 @@ async function verifyAdmin(env: Env, request: Request) {
 async function verifiedGoogleUser(env: Env, request: Request) {
   const idToken = bearerToken(request);
   if (!idToken) throw new Error('AUTH_REQUIRED');
-  const lookup = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
+  const lookup = await fetch(identityToolkitLookupUrl(env) + '?key=' + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
   if (!lookup.ok) throw new Error('AUTH_REQUIRED');
   const account = await lookup.json() as { users?: Array<{ localId?: string; email?: string; displayName?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
   const user = account.users?.[0];
