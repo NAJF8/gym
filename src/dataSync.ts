@@ -50,6 +50,19 @@ export function dedupeById<T extends { id: string }>(items: unknown): T[] {
   return [...new Map(safe.map((item) => [item.id, item])).values()];
 }
 
+/** RTDB turns sparse legacy arrays into objects keyed by their numeric index. */
+export function collectionItems<T = unknown>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (value && typeof value === "object") return Object.values(value as Record<string, T>);
+  return [];
+}
+
+function collectionEntries(value: unknown): Array<[string, unknown]> {
+  if (Array.isArray(value)) return value.map((item, index) => [String(index), item]);
+  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>);
+  return [];
+}
+
 /** RTDB rejects undefined anywhere in an update payload. */
 export function stripUndefined<T>(value: T): T {
   if (Array.isArray(value))
@@ -82,8 +95,8 @@ export function watchAdminData<T>(
   const publish = () => {
     if (!appLoaded) return;
     const value = appData as (T & { members?: unknown }) | null;
-    if (value && Array.isArray(value.members))
-      callback({ ...value, members: filterDeletedMembers(value.members, deleted) } as T);
+    if (value)
+      callback({ ...value, members: filterDeletedMembers(collectionItems(value.members), deleted) } as T);
     else callback(appData);
   };
   const stopApp = onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
@@ -106,7 +119,7 @@ export async function readAdminData<T>() {
     if (!value) return null;
     const deletedSnapshot = await get(ref(firebaseDatabase, "deletedMemberIds"));
     const deleted = deletedSnapshot.exists() ? deletedSnapshot.val() as Record<string, unknown> : {};
-    if (Array.isArray(value.members)) value.members = filterDeletedMembers(value.members, deleted);
+    value.members = filterDeletedMembers(collectionItems(value.members), deleted);
     return value as T;
   } catch (error) {
     throw new FirebaseSyncError("read", firebaseErrorCode(error), "تعذر قراءة Firebase RTDB");
@@ -121,7 +134,7 @@ export async function deleteAdminMember(memberId: string) {
     const root = ref(firebaseDatabase);
     const snapshot = await get(ref(firebaseDatabase, "appData"));
     const appData = snapshot.val() as { members?: unknown } | null;
-    const members = Array.isArray(appData?.members) ? appData.members : [];
+    const members = collectionItems(appData?.members);
     const member = members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as Record<string, unknown> | undefined;
     const tombstoneSnapshot = await get(ref(firebaseDatabase, `deletedMemberIds/${memberId}`));
     if (!member && !tombstoneSnapshot.exists()) throw new FirebaseSyncError("verify", "MEMBER_NOT_FOUND", "المشترك غير موجود في Firebase");
@@ -138,8 +151,9 @@ export async function deleteAdminMember(memberId: string) {
     // during concurrent deletes; an index transaction preserves every other
     // member and cannot resurrect this ID after the tombstone is written.
     if (member) {
-      const memberIndex = members.findIndex((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId);
-      if (memberIndex >= 0) {
+      const memberEntry = collectionEntries(appData?.members).find(([, item]) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId);
+      if (memberEntry) {
+        const [memberIndex] = memberEntry;
         const removal = await runTransaction(ref(firebaseDatabase, `appData/members/${memberIndex}`), (current) => {
           if (current == null) return null;
           if (current && typeof current === "object" && (current as { id?: unknown }).id === memberId) return null;
@@ -170,7 +184,7 @@ export async function deleteAdminMember(memberId: string) {
 
 export async function readAdminMember<T>(memberId: string) {
   const data = await readAdminData<{ members?: unknown }>();
-  const members = Array.isArray(data?.members) ? data.members : [];
+  const members = collectionItems(data?.members);
   return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
 }
 
@@ -183,8 +197,8 @@ export async function readAdminDeletionConflicts() {
   ]);
   const members = membersSnapshot.val();
   const tombstones = tombstonesSnapshot.val() as Record<string, { deletedAt?: unknown }> | null;
-  if (!Array.isArray(members) || !tombstones || typeof tombstones !== "object") return [];
-  return members.flatMap((member) => {
+  if (!tombstones || typeof tombstones !== "object") return [];
+  return collectionItems(members).flatMap((member) => {
     if (!member || typeof member !== "object" || typeof (member as { id?: unknown }).id !== "string") return [];
     const id = (member as { id: string }).id;
     const tombstone = tombstones[id];
@@ -321,21 +335,23 @@ export async function writeAdminData<T>(
   if (Array.isArray(appData.members)) {
     const currentSnapshot = await get(ref(firebaseDatabase, "appData/members"));
     const currentMembers = currentSnapshot.val();
-    const currentIndexes = new Map<string, number>();
-    if (Array.isArray(currentMembers)) {
-      currentMembers.forEach((member, index) => {
+    const currentIndexes = new Map<string, string>();
+    if (currentMembers && typeof currentMembers === "object") {
+      collectionEntries(currentMembers).forEach(([index, member]) => {
         if (member && typeof member === "object" && typeof (member as { id?: unknown }).id === "string")
           currentIndexes.set((member as { id: string }).id, index);
       });
     }
+    const existingKeys = collectionEntries(currentMembers).map(([key]) => Number(key)).filter(Number.isFinite);
+    let nextMemberIndex = existingKeys.length ? Math.max(...existingKeys) + 1 : 0;
     const nextMembers = appData.members as Array<Record<string, unknown>>;
     for (const member of nextMembers) {
       if (!member || typeof member.id !== "string") continue;
       const index = currentIndexes.get(member.id);
       const path = index === undefined
-        ? `appData/members/${Array.isArray(currentMembers) ? currentMembers.length : 0}`
+        ? `appData/members/${nextMemberIndex++}`
         : `appData/members/${index}`;
-      const current = index === undefined ? undefined : currentMembers[index];
+      const current = index === undefined ? undefined : (currentMembers as Record<string, unknown>)[index];
       if (!same(member, current)) updates[path] = stripUndefined(member);
     }
   }
