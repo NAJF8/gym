@@ -30,6 +30,7 @@ import {
   authStatusLabel,
   signInAdmin,
   signOutUser,
+  readAdminRecord,
   watchAuth,
   watchAdminRecord,
   type AdminRecord,
@@ -1017,9 +1018,12 @@ function AdminGate() {
   useEffect(() => {
     if (!user) return;
     // A pending invitation is consumed only after Firebase has authenticated
-    // the matching, verified Google identity. Existing admins simply get a
-    // not-found response and continue through the normal record watcher.
-    void acceptAdminInvitation().then(() => user.getIdToken(true)).catch(() => undefined);
+    // the matching, verified Google identity. Existing admins skip the
+    // invitation request so a normal session does not create a handled 400.
+    void readAdminRecord(user.uid).then(existing => {
+      if (existing) return null;
+      return acceptAdminInvitation().then(() => user.getIdToken(true));
+    }).catch(() => undefined);
   }, [user]);
   useEffect(
     () => {
@@ -2481,7 +2485,7 @@ function PublicExerciseDetail({
 function AdminManagementPage() {
   const [admins, setAdmins] = useState<ManagedAdmin[]>([]); const [email, setEmail] = useState(''); const [role, setRole] = useState<ManagedAdmin['role']>('MANAGER'); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
   const refresh = () => void listManagedAdmins().then(result => setAdmins(result.admins)).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل المدراء'));
-  useEffect(() => { refresh(); void acceptAdminInvitation().catch(() => undefined); }, []);
+  useEffect(() => { refresh(); }, []);
   const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(email, role); setEmail(''); setMessage('تم إنشاء دعوة محددة الصلاحية. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
   const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; try { await updateManagedAdmin(item.uid || '', action, action === 'role' ? (item.role === 'MANAGER' ? 'SUPER_ADMIN' : 'MANAGER') : undefined, value); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
   return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والصلاحيات</h2><p>الدعوات لا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة مدير</h3><div className="form-grid"><label>البريد الإلكتروني<input dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="manager@example.com" /></label><label>نوع الصلاحية<select value={role} onChange={e => setRole(e.target.value as ManagedAdmin['role'])}><option value="MANAGER">MANAGER</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></label></div><Button onClick={add} icon={<Plus size={16} />}>{busy ? 'جارٍ الإنشاء…' : 'إضافة المدير'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المدير</th><th>الدور</th><th>الحالة</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td><b>{item.displayName || '—'}</b><div dir="ltr">{item.email}</div></td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.createdAt ? new Date(item.createdAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا يوجد مدراء إضافيون" text="أنشئ دعوة اختبارية من النموذج أعلاه." />}</section></div>;
