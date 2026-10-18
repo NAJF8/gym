@@ -52,14 +52,18 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
           VITE_PIN_SERVICE_ENDPOINT: ${{ vars.VITE_PIN_SERVICE_ENDPOINT }}
         run: npm run build:staging
-      - name: Deploy Staging PIN Worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx -y wrangler@latest deploy --config worker/wrangler.toml
       - name: Deploy RTDB rules to Staging only
         env:
           FIREBASE_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: npx -y firebase-tools@latest deploy --only database --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}" --token "$FIREBASE_TOKEN"
+      - name: Apply reviewed Staging D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx -y wrangler@latest d1 migrations apply alasas-fit-member-auth-staging --remote --config worker/wrangler.toml
+      - name: Deploy Staging PIN Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx -y wrangler@latest deploy --config worker/wrangler.toml
       - name: Deploy staging site
         env:
           FIREBASE_TOKEN: ${{ steps.auth.outputs.access_token }}
