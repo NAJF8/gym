@@ -36,7 +36,7 @@ before(async () => {
         manager: { role: 'MANAGER', active: true, email: 'manager@example.test' },
         inactive: { role: 'MANAGER', active: false, email: 'inactive@example.test' },
       },
-      appData: { schemaVersion: 1, members: { memberA: { name: 'A' } } },
+      appData: { schemaVersion: 1, membersById: { memberA: { id: 'memberA', name: 'A', version: 1 } }, deletedMemberIds: {} },
       publicExercises: {
         'bench-press': { id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://www.youtube.com/watch?v=old' },
       },
@@ -112,13 +112,13 @@ test('manager can use appData but cannot modify admin roles', async () => {
 
 test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {
   const manager = verifiedContext('manager').database()
-  await assertSucceeds(get(ref(manager, 'deletedMemberIds')))
-  await assertSucceeds(set(ref(manager, 'deletedMemberIds/synthetic-delete-test'), { deletedAt: '2026-10-18T00:00:00.000Z' }))
-  const marker = await assertSucceeds(get(ref(manager, 'deletedMemberIds/synthetic-delete-test')))
+  await assertSucceeds(get(ref(manager, 'appData/deletedMemberIds')))
+  await assertSucceeds(set(ref(manager, 'appData/deletedMemberIds/synthetic-delete-test'), { deletedAt: '2026-10-18T00:00:00.000Z', version: 1 }))
+  const marker = await assertSucceeds(get(ref(manager, 'appData/deletedMemberIds/synthetic-delete-test')))
   assert.equal(marker.val().deletedAt, '2026-10-18T00:00:00.000Z')
-  await assertFails(get(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/synthetic-delete-test')))
-  await assertFails(set(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/unauthorized-test'), { deletedAt: 'now' }))
-  await assertFails(get(ref(env.unauthenticatedContext().database(), 'deletedMemberIds')))
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds/synthetic-delete-test')))
+  await assertFails(set(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds/unauthorized-test'), { deletedAt: 'now', version: 1 }))
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds')))
 })
 
 test('super admin cannot change their own admin record', async () => {
@@ -145,8 +145,8 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   const secondSession = verifiedContext('manager').database()
   await assertSucceeds(set(ref(adminSession, 'appData/settings/gymName'), 'AL ASAS FIT'))
   await assertFails(set(ref(secondSession, 'appData/settings/gymName'), 'blocked'))
-  await assertSucceeds(set(ref(adminSession, 'appData/members/syncMarker'), { name: 'emulator-sync-ok' }))
-  const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/members/syncMarker')))
+  await assertSucceeds(set(ref(adminSession, 'appData/membersById/sync-marker'), { id: 'sync-marker', name: 'emulator-sync-ok', version: 1 }))
+  const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/membersById/sync-marker')))
   assert.equal(snapshot.val().name, 'emulator-sync-ok')
 })
 
@@ -160,12 +160,13 @@ test('member creation and program update sync between two authorized sessions', 
     days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '10' }] }],
   }
 
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001'), member))
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001/days/0/exercises/0/reps'), '12'))
+  await assertSucceeds(set(ref(firstSession, 'appData/membersById/synthetic-member-001'), { ...member, version: 1 }))
+  await assertSucceeds(set(ref(firstSession, 'appData/membersById/synthetic-member-001'), { ...member, days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '12' }] }], version: 2 }))
 
-  const synced = await assertSucceeds(get(ref(secondSession, 'appData/members/synthetic-member-001')))
+  const synced = await assertSucceeds(get(ref(secondSession, 'appData/membersById/synthetic-member-001')))
   assert.deepEqual(synced.val(), {
     ...member,
+    version: 2,
     days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '12' }] }],
   })
 
@@ -189,9 +190,7 @@ test('active admins can atomically reserve member phone index while unauthorized
 test('manager can write the same parent array path used by the admin sync bridge', async () => {
   const manager = verifiedContext('manager').database()
   await assertSucceeds(update(ref(manager), {
-    'appData/members': [
-      { id: 'synthetic-parent-001', name: 'مشترك اختباري', active: true, days: [] },
-    ],
+    'appData/membersById/synthetic-parent-001': { id: 'synthetic-parent-001', name: 'مشترك اختباري', active: true, days: [], version: 1 },
     'publicExercises/bench-press/id': 'bench-press',
     'publicExercises/bench-press/name': 'بنش برس',
     'publicExercises/bench-press/muscle': 'تمارين الصدر',
@@ -204,40 +203,54 @@ test('manager can write the same parent array path used by the admin sync bridge
 
 test('tombstoned member child writes are rejected while unrelated member writes remain allowed', async () => {
   const manager = verifiedContext('manager').database()
-  await assertSucceeds(set(ref(manager, 'appData/members'), [
-    { id: 'race-target', name: 'Race target' },
-    { id: 'race-other', name: 'Race other' },
-  ]))
-  await assertSucceeds(set(ref(manager, 'deletedMemberIds/race-target'), { deletedAt: '2026-10-18T00:00:00.000Z' }))
-  await assertFails(set(ref(manager, 'appData/members/0'), { id: 'race-target', name: 'stale target' }))
-  await assertSucceeds(set(ref(manager, 'appData/members/1'), { id: 'race-other', name: 'updated other' }))
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-target'), { id: 'race-target', name: 'Race target', version: 1 }))
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-other'), { id: 'race-other', name: 'Race other', version: 1 }))
+  await assertSucceeds(set(ref(manager, 'appData/deletedMemberIds/race-target'), { deletedAt: '2026-10-18T00:00:00.000Z', version: 1 }))
+  await assertFails(set(ref(manager, 'appData/membersById/race-target'), { id: 'race-target', name: 'stale target', version: 2 }))
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-other'), { id: 'race-other', name: 'updated other', version: 2 }))
 })
 
 test('concurrent member deletions preserve unrelated members and a concurrent create', async () => {
   const first = verifiedContext('manager').database()
   const second = verifiedContext('super').database()
-  await assertSucceeds(set(ref(first, 'appData/members'), [
-    { id: 'race-a', name: 'A' },
-    { id: 'race-b', name: 'B' },
-    { id: 'race-c', name: 'C' },
-  ]))
+  await assertSucceeds(update(ref(first), {
+    'appData/membersById/race-a': { id: 'race-a', name: 'A', version: 1 },
+    'appData/membersById/race-b': { id: 'race-b', name: 'B', version: 1 },
+    'appData/membersById/race-c': { id: 'race-c', name: 'C', version: 1 },
+  }))
   await Promise.all([
-    assertSucceeds(set(ref(first, 'deletedMemberIds/race-a'), { deletedAt: '2026-10-18T00:00:01.000Z' })),
-    assertSucceeds(set(ref(second, 'deletedMemberIds/race-b'), { deletedAt: '2026-10-18T00:00:02.000Z' })),
-    assertSucceeds(set(ref(first, 'appData/members/3'), { id: 'race-new', name: 'new' })),
+    assertSucceeds(set(ref(first, 'appData/deletedMemberIds/race-a'), { deletedAt: '2026-10-18T00:00:01.000Z', version: 1 })),
+    assertSucceeds(set(ref(second, 'appData/deletedMemberIds/race-b'), { deletedAt: '2026-10-18T00:00:02.000Z', version: 1 })),
+    assertSucceeds(set(ref(first, 'appData/membersById/race-new'), { id: 'race-new', name: 'new', version: 1 })),
   ])
-  const before0 = await assertSucceeds(get(ref(first, 'appData/members/0')))
-  const before1 = await assertSucceeds(get(ref(second, 'appData/members/1')))
+  const before0 = await assertSucceeds(get(ref(first, 'appData/membersById/race-a')))
+  const before1 = await assertSucceeds(get(ref(second, 'appData/membersById/race-b')))
   assert.equal(before0.val().id, 'race-a')
   assert.equal(before1.val().id, 'race-b')
   const removals = await Promise.all([
-    assertSucceeds(runTransaction(ref(first, 'appData/members/0'), current => current == null || current?.id === 'race-a' ? null : undefined)),
-    assertSucceeds(runTransaction(ref(second, 'appData/members/1'), current => current == null || current?.id === 'race-b' ? null : undefined)),
+    assertSucceeds(runTransaction(ref(first, 'appData/membersById/race-a'), current => current == null || current?.id === 'race-a' ? null : undefined)),
+    assertSucceeds(runTransaction(ref(second, 'appData/membersById/race-b'), current => current == null || current?.id === 'race-b' ? null : undefined)),
   ])
   assert.equal(removals[0].committed, true)
   assert.equal(removals[1].committed, true)
-  const final = await assertSucceeds(get(ref(first, 'appData/members')))
-  const ids = (final.val() || []).filter(Boolean).map(item => item.id).sort()
+  const final = await assertSucceeds(get(ref(first, 'appData/membersById')))
+  const ids = Object.values(final.val() || {}).filter(item => item && ['race-a', 'race-b', 'race-c', 'race-new'].includes(item.id)).map(item => item.id).sort()
   assert.deepEqual(ids, ['race-c', 'race-new'])
+})
+
+test('active admin writes enforce bounded member, course, exercise, and tombstone payloads', async () => {
+  const db = verifiedContext('manager').database()
+  await assertFails(set(ref(db, 'appData/membersById/oversized-member'), {
+    id: 'oversized-member', version: 1, name: 'x'.repeat(201),
+  }))
+  await assertFails(set(ref(db, 'appData/deletedMemberIds/oversized-tombstone'), {
+    deletedAt: 'x'.repeat(65), version: 1,
+  }))
+  await assertFails(set(ref(db, 'appData/exercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
+  await assertFails(set(ref(db, 'publicExercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
 })
 

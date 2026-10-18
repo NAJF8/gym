@@ -1,4 +1,5 @@
 import { base64ToBytes, constantTimeEqual, derivePin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto";
+import { applyInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail } from "./invitations";
 
 interface Env {
   PIN_DB: D1Database;
@@ -7,6 +8,11 @@ interface Env {
   FIREBASE_SERVICE_ACCOUNT_EMAIL?: string;
   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
   FIREBASE_SERVICE_ACCOUNT_JSON?: string;
+  LOCAL_EMULATOR_ONLY?: string;
+  FIREBASE_SERVICE_ACCESS_TOKEN?: string;
+  FIREBASE_IDENTITY_TOOLKIT_URL?: string;
+  FIREBASE_OAUTH_TOKEN_URL?: string;
+  FIREBASE_DATABASE_NAMESPACE?: string;
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
   AUTH_DIAGNOSTICS?: string;
@@ -38,6 +44,24 @@ function authDiagnostics(env: Env, values: { authorizationPresent: boolean; toke
   }));
 }
 
+function localEmulator(env: Env) {
+  return env.LOCAL_EMULATOR_ONLY === "true";
+}
+
+function identityToolkitLookupUrl(env: Env) {
+  return localEmulator(env) && env.FIREBASE_IDENTITY_TOOLKIT_URL
+    ? env.FIREBASE_IDENTITY_TOOLKIT_URL
+    : "https://identitytoolkit.googleapis.com/v1/accounts:lookup";
+}
+
+function firebaseUrl(env: Env, path: string, query = "") {
+  const base = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const localNamespace = localEmulator(env) && env.FIREBASE_DATABASE_NAMESPACE
+    ? `ns=${encodeURIComponent(env.FIREBASE_DATABASE_NAMESPACE)}`
+    : "";
+  return base + (localNamespace || query ? `?${[localNamespace, query].filter(Boolean).join("&")}` : "");
+}
+
 function cors(env: Env, requestOrigin = "") {
   const origins = allowedOrigins(env);
   const allowOrigin = requestOrigin && origins.includes(requestOrigin) ? requestOrigin : (origins[0] || "");
@@ -57,6 +81,7 @@ function pemToBytes(pem: string) {
 }
 
 async function serviceAccessToken(env: Env) {
+  if (localEmulator(env) && env.FIREBASE_SERVICE_ACCESS_TOKEN) return env.FIREBASE_SERVICE_ACCESS_TOKEN;
   const now = Math.floor(Date.now() / 1000);
   let serviceAccount: { client_email?: string; private_key?: string } = {};
   if (env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -69,7 +94,7 @@ async function serviceAccessToken(env: Env) {
   const claim = encodeBase64Url(JSON.stringify({ iss: serviceEmail, scope: "https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
   const key = await crypto.subtle.importKey("pkcs8", pemToBytes(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(header + "." + claim));
-  const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
+  const response = await fetch(localEmulator(env) && env.FIREBASE_OAUTH_TOKEN_URL ? env.FIREBASE_OAUTH_TOKEN_URL : "https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + header + "." + claim + "." + encodeBase64Url(signature) });
   if (!response.ok) throw new Error("Firebase service authentication failed");
   const body = await response.json() as { access_token?: string };
   if (!body.access_token) throw new Error("Firebase service token missing");
@@ -77,14 +102,21 @@ async function serviceAccessToken(env: Env) {
 }
 
 async function firebaseGet(env: Env, path: string, accessToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json";
+  const url = firebaseUrl(env, path);
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
 }
 
+async function firebaseWrite(env: Env, path: string, value: unknown, accessToken: string, method: 'PUT' | 'PATCH' = 'PUT') {
+  const url = firebaseUrl(env, path);
+  const response = await fetch(url, { method, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  if (!response.ok) throw new Error('Firebase write failed');
+  return response.json();
+}
+
 async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
-  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json?auth=" + encodeURIComponent(idToken);
+  const url = firebaseUrl(env, path, "auth=" + encodeURIComponent(idToken));
   const response = await fetch(url);
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
@@ -97,7 +129,7 @@ async function verifyAdmin(env: Env, request: Request) {
     authDiagnostics(env, { authorizationPresent: Boolean(authorization), tokenAcquired: false, lookupHttpStatus: null, authFailureStage: authorization ? "bearer_missing" : "authorization_missing" });
     throw new Error("AUTH_REQUIRED:" + (authorization ? "bearer_missing" : "authorization_missing"));
   }
-  const lookup = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
+  const lookup = await fetch(identityToolkitLookupUrl(env) + "?key=" + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }) });
   if (!lookup.ok) {
     let failureStage = "identity_lookup_failed";
     try {
@@ -116,21 +148,110 @@ async function verifyAdmin(env: Env, request: Request) {
     authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "identity_claims_not_admin_eligible" });
     throw new Error("ADMIN_REQUIRED");
   }
-  const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean } | null;
+  const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean; invitationId?: unknown } | null;
   if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) {
     authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "admin_record_missing_or_inactive_or_role" });
     throw new Error("ADMIN_REQUIRED");
+  }
+  // Invitation-created admins do not become effective until D1 has recorded
+  // the same invitation as APPLIED.  Bootstrap admins have no invitationId.
+  if (typeof record.invitationId === "string" && record.invitationId) {
+    const applied = await env.PIN_DB.prepare("SELECT 1 FROM admin_invitations WHERE invitation_id = ? AND status = 'APPLIED' AND applied_uid = ?").bind(record.invitationId, user.localId).first();
+    if (!applied) {
+      authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "invitation_not_applied" });
+      throw new Error("ADMIN_REQUIRED");
+    }
   }
   authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "success" });
   return user.localId;
 }
 
+async function verifiedGoogleUser(env: Env, request: Request) {
+  const idToken = bearerToken(request);
+  if (!idToken) throw new Error('AUTH_REQUIRED');
+  const lookup = await fetch(identityToolkitLookupUrl(env) + '?key=' + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
+  if (!lookup.ok) throw new Error('AUTH_REQUIRED');
+  const account = await lookup.json() as { users?: Array<{ localId?: string; email?: string; displayName?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
+  const user = account.users?.[0];
+  if (!user?.localId || !user.email || user.emailVerified !== true || !user.providerUserInfo?.some(item => item.providerId === 'google.com')) throw new Error('ADMIN_REQUIRED');
+  return { ...user, idToken };
+}
+
+async function adminManagement(env: Env, request: Request, action: string) {
+  if (action === 'accept') {
+    const user = await verifiedGoogleUser(env, request);
+    const now = Date.now();
+    const email = normalizeInvitationEmail(user.email);
+    const invite = await claimLatestInvitation(env.PIN_DB, email, user.localId!, now);
+    if (!invite) throw new Error('INVITATION_NOT_FOUND');
+    if (invite.expires_at <= now) {
+      await expireInvitation(env.PIN_DB, invite, now);
+      throw new Error('INVITATION_EXPIRED');
+    }
+    const token = await serviceAccessToken(env);
+    const current = await firebaseGet(env, `admins/${encodeURIComponent(user.localId!)}`, token) as { email?: string; role?: string; active?: boolean } | null;
+    if (current) {
+      if (current.email === email && current.role === invite.role && current.active === true) {
+        // A prior attempt may have completed the Firebase write but failed
+        // before D1 recorded APPLIED.  Do not report recovery as successful
+        // until the claimed invitation is durably transitioned too.
+        if (!await applyInvitation(env.PIN_DB, invite, user.localId!, now))
+          throw new Error('INVITATION_APPLY_RETRYABLE');
+        return json({ role: invite.role, linked: true, idempotent: true }, 200, cors(env, request.headers.get('origin') || ''));
+      }
+      await expireInvitation(env.PIN_DB, invite, now);
+      throw new Error('EXISTING_ADMIN_PROTECTED');
+    }
+    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, invitationId: invite.invitation_id, createdAt: new Date(now).toISOString(), lastLoginAt: new Date(now).toISOString() }, token);
+    if (!await applyInvitation(env.PIN_DB, invite, user.localId!, now)) throw new Error('INVITATION_APPLY_RETRYABLE');
+    return json({ role: invite.role, linked: true }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  const actorUid = await verifyAdmin(env, request);
+  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string; email?: string } | null;
+  if (actor?.role !== 'SUPER_ADMIN') throw new Error('SUPER_ADMIN_REQUIRED');
+  const token = await serviceAccessToken(env);
+  if (action === 'list') {
+    const admins = await firebaseGet(env, 'admins', token) as Record<string, Record<string, unknown>> | null;
+    const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt })).filter(row => row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
+    const invites = await env.PIN_DB.prepare("SELECT email, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
+    for (const invite of invites.results || []) rows.push({ email: String(invite.email || ''), displayName: '', role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
+    return json({ admins: rows }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  if (action === 'invite') {
+    const body = await request.json() as { email?: unknown; role?: unknown };
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const role = body.role === 'MANAGER' || body.role === 'SUPER_ADMIN' ? body.role : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !role) throw new Error('INVITATION_INVALID');
+    if (email === normalizeInvitationEmail(actor?.email)) throw new Error('SELF_INVITE_FORBIDDEN');
+    const existingAdmins = await firebaseGet(env, 'admins', token) as Record<string, { email?: string }> | null;
+    if (Object.values(existingAdmins || {}).some(item => normalizeInvitationEmail(item.email) === email)) throw new Error('EXISTING_ADMIN_PROTECTED');
+    const invitationId = crypto.randomUUID(); const now = Date.now();
+    await createInvitation(env.PIN_DB, { invitationId, email, role, actorUid, now, expiresAt: now + 7 * 24 * 60 * 60 * 1000 });
+    return json({ invitationId }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  const body = await request.json() as { uid?: unknown; action?: unknown; role?: unknown; active?: unknown };
+  if (typeof body.uid !== 'string' || !['role', 'active', 'remove'].includes(String(body.action))) throw new Error('ADMIN_UPDATE_INVALID');
+  if (body.uid === actorUid) throw new Error('SELF_CHANGE_FORBIDDEN');
+  const target = await firebaseGet(env, `admins/${encodeURIComponent(body.uid)}`, token) as { role?: string; active?: boolean; email?: string } | null;
+  if (!target) throw new Error('ADMIN_NOT_FOUND');
+  if (target.role === 'SUPER_ADMIN' && (body.action === 'remove' || body.active === false)) {
+    const admins = await firebaseGet(env, 'admins', token) as Record<string, { role?: string; active?: boolean }> | null;
+    if (Object.values(admins || {}).filter(item => item.role === 'SUPER_ADMIN' && item.active === true).length <= 1) throw new Error('LAST_SUPER_ADMIN');
+  }
+  const value = body.action === 'remove' ? null : { ...target, ...(body.action === 'role' && (body.role === 'MANAGER' || body.role === 'SUPER_ADMIN') ? { role: body.role } : {}), ...(body.action === 'active' && typeof body.active === 'boolean' ? { active: body.active } : {}) };
+  await firebaseWrite(env, `admins/${encodeURIComponent(body.uid)}`, value, token);
+  await env.PIN_DB.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, ?)").bind(crypto.randomUUID(), `ADMIN_${String(body.action).toUpperCase()}`, actorUid, body.uid, target.email || null, typeof value?.role === 'string' ? value.role : target.role || null, Date.now()).run();
+  return json({ ok: true }, 200, cors(env, request.headers.get('origin') || ''));
+}
+
 async function readMember(env: Env, memberId: string) {
   const token = await serviceAccessToken(env);
-  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(memberId)}`, token);
+  const tombstone = await firebaseGet(env, `appData/deletedMemberIds/${encodeURIComponent(memberId)}`, token);
   if (tombstone) throw new Error("MEMBER_DELETED");
-  const appData = await firebaseGet(env, "appData", token) as { members?: unknown; courses?: unknown; exercises?: unknown } | null;
-  const members = Array.isArray(appData?.members)
+  const appData = await firebaseGet(env, "appData", token) as { membersById?: unknown; members?: unknown; courses?: unknown; exercises?: unknown } | null;
+  const members = appData?.membersById && typeof appData.membersById === "object"
+    ? Object.values(appData.membersById as Record<string, Record<string, unknown>>)
+    : Array.isArray(appData?.members)
     ? appData.members
     : appData?.members && typeof appData.members === "object"
       ? Object.values(appData.members as Record<string, Record<string, unknown>>)
@@ -221,7 +342,9 @@ async function issuePin(env: Env, request: Request) {
   const body = await request.json() as { memberId?: unknown; phone?: unknown };
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   const { member } = await readMember(env, body.memberId);
-  const phone = normalizePhone(body.phone ?? member.phoneE164 ?? member.phoneDisplay ?? member.phone);
+  const storedPhone = normalizePhone(member.phoneE164 ?? member.phoneDisplay ?? member.phone);
+  const phone = normalizePhone(body.phone ?? storedPhone);
+  if (phone !== storedPhone) throw new Error("MEMBER_PHONE_MISMATCH");
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
   const pin = randomPin();
   const credential = await hashPin(pin);
@@ -282,7 +405,7 @@ async function revokeMember(env: Env, request: Request) {
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   // Permit retry after RTDB deletion: the tombstone proves this ID belonged to a deleted member.
   const token = await serviceAccessToken(env);
-  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(body.memberId)}`, token);
+  const tombstone = await firebaseGet(env, `appData/deletedMemberIds/${encodeURIComponent(body.memberId)}`, token);
   if (!tombstone) await readMember(env, body.memberId);
   const now = Date.now();
   await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', credential_version = credential_version + 1, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), body.memberId).run();
@@ -301,6 +424,7 @@ export default {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
       if (url.pathname === "/v1/admin/member-revoke") return await revokeMember(env, request);
+      if (url.pathname.startsWith('/v1/admin/management/')) return await adminManagement(env, request, url.pathname.split('/').pop() || '');
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
@@ -309,7 +433,7 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
       const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);

@@ -22,8 +22,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: npm ci
-      - run: npm run test:pin && npm run test:video && npm run test:members && npm run test:phone
-      - run: npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
+      - run: npm run test:pin && npm run test:video && npm run test:phone
+      - run: npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:members && npm run test:rules"
       - name: Build Staging bundle
         env:
           VITE_BASE_PATH: /

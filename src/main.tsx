@@ -30,6 +30,7 @@ import {
   authStatusLabel,
   signInAdmin,
   signOutUser,
+  readAdminRecord,
   watchAuth,
   watchAdminRecord,
   type AdminRecord,
@@ -60,6 +61,7 @@ import {
   pinServiceConfigured,
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
+import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
@@ -261,6 +263,70 @@ const seedExercises: Exercise[] = [
     rest: "45 ثانية",
   },
 ];
+
+/** Optional library suggestions; imported explicitly, never written during initial hydration. */
+const suggestedExercises: Exercise[] = [
+  { id: "library-db-fly", name: "تفتيح دمبل مستوي", english: "Dumbbell Fly", muscle: muscles[0], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-chest-machine", name: "جهاز صدر", english: "Chest Press Machine", muscle: muscles[0], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-push-up", name: "ضغط صدر", english: "Push-Up", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-single-arm-row", name: "تجديف دمبل", english: "One Arm Dumbbell Row", muscle: muscles[1], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-tbar-row", name: "تي بار", english: "T-Bar Row", muscle: muscles[1], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-straight-pulldown", name: "سحب مستقيم", english: "Straight Arm Pulldown", muscle: muscles[1], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-leg-press", name: "ليج برس", english: "Leg Press", muscle: muscles[2], sets: 4, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-leg-extension", name: "تمديد الأرجل", english: "Leg Extension", muscle: muscles[2], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-leg-curl", name: "ثني الأرجل", english: "Leg Curl", muscle: muscles[2], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-rdl", name: "رومانيان ديدلفت", english: "Romanian Deadlift", muscle: muscles[2], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-db-shoulder-press", name: "ضغط كتف دمبل", english: "Dumbbell Shoulder Press", muscle: muscles[3], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-lateral-raise", name: "رفرفة جانبية", english: "Lateral Raise", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-rear-delt-fly", name: "رفرفة خلفية", english: "Rear Delt Fly", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-face-pull", name: "فيس بول", english: "Face Pull", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-barbell-curl", name: "بايسبس بار", english: "Barbell Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-hammer-curl", name: "هامر", english: "Hammer Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-preacher-curl", name: "بريتشر", english: "Preacher Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-overhead-triceps", name: "تمديد فوق الرأس", english: "Overhead Triceps Extension", muscle: muscles[5], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-skull-crusher", name: "سكَل كراشر", english: "Skull Crusher", muscle: muscles[5], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-crunch", name: "كرنش", english: "Crunch", muscle: muscles[6], sets: 3, reps: "15–20", rest: "60 ثانية" },
+  { id: "library-leg-raise", name: "رفع الأرجل", english: "Leg Raise", muscle: muscles[6], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-wrist-curl", name: "ثني المعصم", english: "Wrist Curl", muscle: muscles[7], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-standing-calf", name: "واقف سمانة", english: "Standing Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-seated-calf", name: "جالس سمانة", english: "Seated Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-decline-press", name: "بنش برس مائل للأسفل", english: "Decline Barbell Press", muscle: muscles[0], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-incline-cable-fly", name: "تفتيح كيبل مائل", english: "Incline Cable Fly", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-pec-deck", name: "بك ديك", english: "Pec Deck Fly", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-chest-dips", name: "متوازي للصدر", english: "Chest Dips", muscle: muscles[0], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-pull-up", name: "عقلة", english: "Pull-Up", muscle: muscles[1], sets: 3, reps: "6–12", rest: "90 ثانية" },
+  { id: "library-chest-supported-row", name: "تجديف مدعوم للصدر", english: "Chest Supported Row", muscle: muscles[1], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-reverse-grip-pulldown", name: "سحب أمامي قبضة عكسية", english: "Reverse Grip Lat Pulldown", muscle: muscles[1], sets: 3, reps: "10–12", rest: "75 ثانية" },
+  { id: "library-back-extension", name: "تمديد الظهر", english: "Back Extension", muscle: muscles[1], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-bulgarian-split-squat", name: "سكوات بلغاري", english: "Bulgarian Split Squat", muscle: muscles[2], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-walking-lunge", name: "لانج مشي", english: "Walking Lunge", muscle: muscles[2], sets: 3, reps: "10–12", rest: "75 ثانية" },
+  { id: "library-hip-thrust", name: "هيب ثرست", english: "Barbell Hip Thrust", muscle: muscles[2], sets: 4, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-hack-squat", name: "هاك سكوات", english: "Hack Squat Machine", muscle: muscles[2], sets: 3, reps: "10–12", rest: "90 ثانية" },
+  { id: "library-front-squat", name: "فرونت سكوات", english: "Front Squat", muscle: muscles[2], sets: 3, reps: "6–10", rest: "120 ثانية" },
+  { id: "library-arnold-press", name: "أرنولد برس", english: "Arnold Press", muscle: muscles[3], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-upright-row", name: "تجديف عمودي", english: "Upright Row", muscle: muscles[3], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-cable-lateral-raise", name: "رفرفة جانبية كيبل", english: "Cable Lateral Raise", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-reverse-pec-deck", name: "بك ديك خلفي", english: "Reverse Pec Deck", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-cable-curl", name: "بايسبس كيبل", english: "Cable Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-incline-curl", name: "بايسبس دمبل مائل", english: "Incline Dumbbell Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-concentration-curl", name: "تركيز دمبل", english: "Concentration Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-triceps-dips", name: "متوازي ترايسبس", english: "Triceps Dips", muscle: muscles[5], sets: 3, reps: "8–12", rest: "75 ثانية" },
+  { id: "library-rope-pushdown", name: "ترايسبس حبل", english: "Rope Pushdown", muscle: muscles[5], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-close-grip-press", name: "بنش قبضة ضيقة", english: "Close Grip Bench Press", muscle: muscles[5], sets: 3, reps: "8–12", rest: "90 ثانية" },
+  { id: "library-cable-crunch", name: "كرنش كيبل", english: "Cable Crunch", muscle: muscles[6], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-russian-twist", name: "لف روسي", english: "Russian Twist", muscle: muscles[6], sets: 3, reps: "16–24", rest: "45 ثانية" },
+  { id: "library-ab-wheel", name: "عجلة البطن", english: "Ab Wheel Rollout", muscle: muscles[6], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-reverse-crunch", name: "كرنش عكسي", english: "Reverse Crunch", muscle: muscles[6], sets: 3, reps: "12–15", rest: "45 ثانية" },
+  { id: "library-reverse-wrist-curl", name: "ثني معصم عكسي", english: "Reverse Wrist Curl", muscle: muscles[7], sets: 3, reps: "12–15", rest: "45 ثانية" },
+  { id: "library-farmers-carry", name: "مشي المزارع", english: "Farmer Carry", muscle: muscles[7], sets: 3, reps: "30–45 ثانية", rest: "60 ثانية" },
+  { id: "library-calf-press", name: "سمانة على الليج برس", english: "Leg Press Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-donkey-calf", name: "سمانة حمار", english: "Donkey Calf Raise", muscle: muscles[8], sets: 3, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-treadmill-walk", name: "مشي جهاز", english: "Treadmill Walk", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
+  { id: "library-treadmill-run", name: "ركض جهاز", english: "Treadmill Run", muscle: muscles[9], sets: 1, reps: "10–20 دقيقة", rest: "—" },
+  { id: "library-stationary-bike", name: "دراجة ثابتة", english: "Stationary Bike", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
+  { id: "library-rowing-machine", name: "جهاز التجديف", english: "Rowing Machine", muscle: muscles[9], sets: 1, reps: "10–20 دقيقة", rest: "—" },
+  { id: "library-elliptical", name: "إليبتكال", english: "Elliptical Trainer", muscle: muscles[9], sets: 1, reps: "15–30 دقيقة", rest: "—" },
+];
 const defaults: SettingsData = {
   coachName: "محمد عبدالرزاق",
   gymName: "AL ASAS FIT",
@@ -400,7 +466,8 @@ type Page =
   | "barcodes"
   | "courses"
   | "members"
-  | "settings";
+  | "settings"
+  | "admins";
 function Logo({ s }: { s: SettingsData }) {
   return (
     <div className="brand">
@@ -423,16 +490,19 @@ function Button({
   onClick,
   secondary = false,
   icon,
+  disabled = false,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   secondary?: boolean;
   icon?: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
       className={secondary ? "secondary-btn" : "primary-btn"}
       onClick={onClick}
+      disabled={disabled}
     >
       {icon}
       {children}
@@ -508,7 +578,7 @@ function Sidebar({
           </button>
         ))}
         {role === "SUPER_ADMIN" && (
-          <button className="nav-item" type="button">
+          <button className={`nav-item ${page === "admins" ? "active" : ""}`} type="button" onClick={() => { setPage("admins"); close(); }}>
             <Users size={17} />
             <span>المدراء والصلاحيات</span>
           </button>
@@ -898,6 +968,7 @@ function App({
     courses: "الكورسات الجاهزة",
     members: "المشتركون",
     settings: "إعدادات الموقع",
+    admins: "المدراء والصلاحيات",
   }[page];
   return (
     <div
@@ -968,6 +1039,7 @@ function App({
               {page === "settings" && (
                 <SettingsPage s={settings} setS={setSettings} />
               )}
+              {page === "admins" && role === "SUPER_ADMIN" && <AdminManagementPage />}
             </main>
           </div>
         </>
@@ -1010,6 +1082,16 @@ function AdminGate() {
     setUser(nextUser);
     setAuthReady(true);
   }), []);
+  useEffect(() => {
+    if (!user) return;
+    // A pending invitation is consumed only after Firebase has authenticated
+    // the matching, verified Google identity. Existing admins skip the
+    // invitation request so a normal session does not create a handled 400.
+    void readAdminRecord(user.uid).then(existing => {
+      if (existing) return null;
+      return acceptAdminInvitation().then(() => user.getIdToken(true));
+    }).catch(() => undefined);
+  }, [user]);
   useEffect(
     () => {
       if (!user) {
@@ -1088,6 +1170,14 @@ function Categories({
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
   const list = exercises.filter((e) => e.muscle === muscle);
+  const importSuggestions = () => {
+    setExercises((current) => {
+      const existing = new Set(current.map((e) => e.id));
+      const existingNames = new Set(current.map((e) => `${normalizeMuscle(e.muscle)}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
+      const additions = suggestedExercises.filter((e) => !existing.has(e.id) && !existingNames.has(`${e.muscle}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
+      return additions.length ? [...current, ...additions] : current;
+    });
+  };
   const save = (e: Exercise) => {
     setExercises((x) =>
       x.some((a) => a.id === e.id)
@@ -1103,7 +1193,7 @@ function Categories({
           <h2>مكتبة التمارين</h2>
           <p>المصدر الموحد للتمارين المستخدمة في الكورسات والباركودات.</p>
         </div>
-        <Button
+        <div className="exercise-library-actions"><Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة التمارين الافتراضية</Button><Button
           onClick={() => {
             setEditing(null);
             setShow(true);
@@ -1111,7 +1201,7 @@ function Categories({
           icon={<Plus size={17} />}
         >
           إضافة تمرين
-        </Button>
+        </Button></div>
       </section>
       <div className="library-layout">
         <aside className="muscle-list">
@@ -1894,6 +1984,15 @@ function Review({
     </div>
   );
 }
+function PhonePreview({ value }: { value: string }) {
+  if (!value.trim()) return <p className="phone-preview phone-preview-error" role="status">أدخل رقم هاتف عراقي لإصدار PIN بعد الحفظ.</p>;
+  try {
+    const canonical = normalizeIraqiPhone(value);
+    return <p className="phone-preview" role="status">سيُحفظ الرقم بصيغة موحّدة: <b dir="ltr">{canonical}</b></p>;
+  } catch {
+    return <p className="phone-preview phone-preview-error" role="alert">رقم الهاتف العراقي غير صالح. استخدم 07XXXXXXXXX أو +9647XXXXXXXXX.</p>;
+  }
+}
 function WizardActions({
   step,
   setStep,
@@ -1939,6 +2038,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
   const [editing, setEditing] = useState<Member | null>(null);
   const [show, setShow] = useState(false);
   const [pin, setPin] = useState('');
+  const [pinMember, setPinMember] = useState<Member | null>(null);
   const [pinBusy, setPinBusy] = useState(false);
   const [pinError, setPinError] = useState('');
   const [issueTarget, setIssueTarget] = useState<Member | null>(null);
@@ -1969,7 +2069,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
       const remote = await readAdminData<AppPayload>();
       const persisted = normalizeMembers(remote?.members).find(item => item.id === m.id);
       if (!persisted) throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');
-      setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true));
+    setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true)); setPinMember(persisted);
       setIssueTarget(null); setIssuePhone('');
     } catch (e) { setPinError(e instanceof Error ? e.message : 'تعذر إصدار PIN من الخدمة الموثوقة'); }
     finally { setPinBusy(false); }
@@ -1999,7 +2099,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
     {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
     {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone)}>{pinBusy ? 'جارٍ الإصدار…' : 'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
-    {pin && <section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}
+    {pin && <section className="pin-card" role="status" aria-label="بطاقة رمز الدخول"><header><b>✓ تم إصدار رمز الدخول بنجاح</b><button className="icon-btn" aria-label="إغلاق بطاقة PIN" onClick={() => { setPin(''); setPinMember(null); }}><X size={17}/></button></header><div className="pin-card-meta"><span>المشترك: <b>{pinMember?.name || '—'}</b></span><span>رقم العضوية: <b>{pinMember?.membershipId || '—'}</b></span></div><p>رمز الدخول الخاص بك</p><strong dir="ltr">{pin.split('').join('  ')}</strong><div><button className="primary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة البطاقة</button><button className="secondary-btn" onClick={() => { setPin(''); setPinMember(null); }}>إغلاق</button></div><small>🔒 يظهر هذا الرمز مرة واحدة فقط، ولا يُحفظ في المتصفح أو Firebase.</small></section>}
     {pinError && <p className="auth-error" role="alert">{pinError}</p>}
     {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إصدار / إعادة إصدار PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
     {(show || editing) && <MemberWizard initial={editing} exercises={exercises} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
@@ -2030,6 +2130,7 @@ function MemberWizard({
   const [height, setHeight] = useState(initial?.height || "");
   const [weight, setWeight] = useState(initial?.weight || "");
   const [validationError, setValidationError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
   const [muscle, setMuscle] = useState(muscles[0]);
@@ -2117,11 +2218,12 @@ function MemberWizard({
               />
             </label>
             <label>
-              رقم هاتف المشترك
+              رقم هاتف المشترك (مطلوب)
               <input
                 disabled={viewOnly}
                 inputMode="tel"
                 autoComplete="tel"
+                placeholder="0770 123 4567 أو +964 770 123 4567"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
@@ -2151,6 +2253,7 @@ function MemberWizard({
               Google لتسجيل المشتركين.
             </p>
           )}
+          {!viewOnly && <PhonePreview value={phone} />}
         </div>
       )}
       {step === 2 && (
@@ -2210,11 +2313,14 @@ function MemberWizard({
         )}
         {!viewOnly && step === 4 && (
           <Button
+            disabled={saving}
             onClick={async () => {
               try {
                 const normalizedMemberName = cleanMemberName(name);
-                const normalizedMemberPhone = phone.trim() ? normalizeIraqiPhone(phone) : "";
+                if (!phone.trim()) throw new Error("رقم هاتف المشترك مطلوب قبل الحفظ");
+                const normalizedMemberPhone = normalizeIraqiPhone(phone);
                 setValidationError("");
+                setSaving(true);
                 await onSave({
                   id: initial?.id || uid(),
                   membershipId: membershipId.trim(),
@@ -2222,21 +2328,21 @@ function MemberWizard({
                   height,
                   weight,
                   createdAt: initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
-                  ...(normalizedMemberPhone ? {
-                    phoneE164: normalizedMemberPhone,
-                    phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
-                  } : {}),
+                  phoneE164: normalizedMemberPhone,
+                  phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
                   days: cloneDays(selected.slice(0, days)),
                   active,
                   ...(authUid.trim() ? { authUid: authUid.trim() } : {}),
                 });
               } catch (error) {
                 setValidationError(error instanceof Error ? error.message : "بيانات المشترك غير صالحة");
+              } finally {
+                setSaving(false);
               }
             }}
             icon={<Check size={16} />}
           >
-            حفظ
+            {saving ? "جارٍ حفظ Firebase…" : "حفظ المشترك والكورس"}
           </Button>
         )}
         {validationError && <p className="auth-error" role="alert">{validationError}</p>}
@@ -2466,6 +2572,14 @@ function PublicExerciseDetail({
     </main>
   );
 }
+function AdminManagementPage() {
+  const [admins, setAdmins] = useState<ManagedAdmin[]>([]); const [email, setEmail] = useState(''); const [role, setRole] = useState<ManagedAdmin['role']>('MANAGER'); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
+  const refresh = () => void listManagedAdmins().then(result => setAdmins(result.admins)).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل المدراء'));
+  useEffect(() => { refresh(); }, []);
+  const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(email, role); setEmail(''); setMessage('تم إنشاء دعوة محددة الصلاحية. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
+  const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; try { await updateManagedAdmin(item.uid || '', action, action === 'role' ? (item.role === 'MANAGER' ? 'SUPER_ADMIN' : 'MANAGER') : undefined, value); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
+  return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والصلاحيات</h2><p>الدعوات لا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة مدير</h3><div className="form-grid"><label>البريد الإلكتروني<input dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="manager@example.com" /></label><label>نوع الصلاحية<select value={role} onChange={e => setRole(e.target.value as ManagedAdmin['role'])}><option value="MANAGER">MANAGER</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></label></div><Button onClick={add} icon={<Plus size={16} />}>{busy ? 'جارٍ الإنشاء…' : 'إضافة المدير'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المدير</th><th>الدور</th><th>الحالة</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td><b>{item.displayName || '—'}</b><div dir="ltr">{item.email}</div></td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.createdAt ? new Date(item.createdAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا يوجد مدراء إضافيون" text="أنشئ دعوة اختبارية من النموذج أعلاه." />}</section></div>;
+}
 function SettingsPage({
   s,
   setS,
@@ -2661,7 +2775,7 @@ function Modal({
             <X size={18} />
           </button>
         </div>
-        {children}
+        <div className="modal-scroll-content" tabIndex={0}>{children}</div>
       </section>
     </div>
   );
