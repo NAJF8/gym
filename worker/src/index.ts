@@ -224,6 +224,16 @@ async function issuePin(env: Env, request: Request) {
   return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
+async function revokeMemberAccess(env: Env, request: Request) {
+  await verifyAdmin(env, request);
+  const body = await request.json() as { memberId?: unknown };
+  if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
+  const now = Date.now();
+  const disabled = await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', updated_at = ?, locked_until = ? WHERE member_id = ?").bind(new Date(now).toISOString(), now + 365 * 24 * 60 * 60_000, body.memberId).run();
+  await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
+  return json({ ok: true, memberId: body.memberId, disabled: Number(disabled.meta?.changes || 0) }, 200, cors(env, request.headers.get("origin") || ""));
+}
+
 async function memberLogin(env: Env, request: Request) {
   const body = await request.json() as { phone?: unknown; pin?: unknown };
   if (!isPin(body.pin)) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
@@ -277,6 +287,7 @@ export default {
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
+      if (url.pathname === "/v1/admin/member-revoke") return await revokeMemberAccess(env, request);
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
