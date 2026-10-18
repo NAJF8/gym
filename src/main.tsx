@@ -28,7 +28,6 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import {
   authStatusLabel,
-  readAdminRecord,
   signInAdmin,
   signOutUser,
   watchAuth,
@@ -1002,20 +1001,28 @@ function AuthNotice({
 }
 function AdminGate() {
   const [user, setUser] = useState<import("firebase/auth").User | null>(null);
-  const [record, setRecord] = useState<AdminRecord | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [record, setRecord] = useState<AdminRecord | null | undefined>(undefined);
+  const [recordError, setRecordError] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => watchAuth(setUser), []);
+  useEffect(() => watchAuth(nextUser => {
+    setUser(nextUser);
+    setAuthReady(true);
+  }), []);
   useEffect(
-    () => (user ? watchAdminRecord(user.uid, setRecord) : setRecord(null)),
+    () => {
+      if (!user) {
+        setRecord(undefined);
+        setRecordError("");
+        return undefined;
+      }
+      setRecord(undefined);
+      setRecordError("");
+      return watchAdminRecord(user.uid, setRecord, error => setRecordError(error.message));
+    },
     [user],
   );
-  useEffect(() => {
-    if (user)
-      readAdminRecord(user.uid)
-        .then(setRecord)
-        .catch(() => setRecord(null));
-  }, [user]);
   if (!firebaseConfigured)
     return (
       <AuthNotice
@@ -1023,6 +1030,8 @@ function AdminGate() {
         text="تم منع عرض بيانات الإدارة لأن Firebase غير مهيأ في هذه النسخة. أضف إعدادات VITE_FIREBASE_* ثم أعد البناء."
       />
     );
+  if (!authReady || (user && record === undefined && !recordError))
+    return <AuthNotice title="جارٍ التحقق من جلسة المدير" text="انتظر اكتمال التحقق من Google وصلاحيات Firebase قبل عرض حالة الوصول." />;
   if (!user)
     return (
       <main className="auth-page admin-login-page" dir="rtl">
@@ -1048,6 +1057,8 @@ function AdminGate() {
         </div>
       </main>
     );
+  if (recordError)
+    return <AuthNotice title="تعذر التحقق من الصلاحيات" text="لم تُعرض بيانات الإدارة لأن التحقق من سجل المدير لم يكتمل. أعد المحاولة بعد استقرار الاتصال." action={() => window.location.reload()} actionLabel="إعادة المحاولة" />;
   if (!user.emailVerified || !record?.active)
     return (
       <AuthNotice

@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
-import { connectAuthEmulator, getAuth, GoogleAuthProvider } from 'firebase/auth'
+import { browserLocalPersistence, connectAuthEmulator, getAuth, GoogleAuthProvider, setPersistence } from 'firebase/auth'
 import { getDatabase } from 'firebase/database'
 import { connectDatabaseEmulator } from 'firebase/database'
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
@@ -16,6 +16,10 @@ const config = {
 export const firebaseConfigured = Object.values(config).every(Boolean)
 export const firebaseApp = firebaseConfigured ? (getApps()[0] ?? initializeApp(config)) : null
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null
+/** Keep the Google admin session across refreshes; callers await this before sign-in. */
+export const authPersistenceReady = firebaseAuth
+  ? setPersistence(firebaseAuth, browserLocalPersistence)
+  : Promise.resolve()
 export const firebaseDatabase = firebaseApp ? getDatabase(firebaseApp) : null
 export const firebaseFunctions = firebaseApp ? getFunctions(firebaseApp) : null
 export const googleProvider = new GoogleAuthProvider()

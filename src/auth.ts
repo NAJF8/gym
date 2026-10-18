@@ -1,6 +1,6 @@
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut, type User } from 'firebase/auth'
 import { get, onValue, ref } from 'firebase/database'
-import { firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
+import { authPersistenceReady, firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
 
 export type AdminRole = 'SUPER_ADMIN' | 'MANAGER'
 export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string }
@@ -24,6 +24,7 @@ export function watchAuth(callback: (user: User | null) => void) {
 
 export async function signInAdmin() {
   if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
+  await authPersistenceReady
   try {
     return await signInWithPopup(firebaseAuth, googleProvider)
   } catch (error) {
@@ -37,6 +38,7 @@ export async function signInAdmin() {
 /** Google authentication is shared; authorization remains route-specific in RTDB rules. */
 export async function signInMember() {
   if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
+  await authPersistenceReady
   return signInWithPopup(firebaseAuth, googleProvider)
 }
 
@@ -64,11 +66,11 @@ export async function getSafeAuthDiagnostics(user: User | null): Promise<SafeAut
   }
 }
 
-export function watchAdminRecord(uid: string, callback: (record: AdminRecord | null) => void) {
+export function watchAdminRecord(uid: string, callback: (record: AdminRecord | null) => void, onError?: (error: Error) => void) {
   if (!firebaseDatabase) return () => undefined
   return onValue(ref(firebaseDatabase, `admins/${uid}`), snapshot => {
     callback(snapshot.exists() ? parseAdminRecord(snapshot.val()) : null)
-  }, () => callback(null))
+  }, error => onError?.(error instanceof Error ? error : new Error('تعذر التحقق من صلاحيات المدير')))
 }
 
 export function authStatusLabel() {
