@@ -148,10 +148,19 @@ async function verifyAdmin(env: Env, request: Request) {
     authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "identity_claims_not_admin_eligible" });
     throw new Error("ADMIN_REQUIRED");
   }
-  const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean } | null;
+  const record = await firebaseGetWithIdToken(env, "admins/" + encodeURIComponent(user.localId), idToken) as { role?: string; active?: boolean; invitationId?: unknown } | null;
   if (!record || record.active !== true || !["SUPER_ADMIN", "MANAGER"].includes(record.role || "")) {
     authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "admin_record_missing_or_inactive_or_role" });
     throw new Error("ADMIN_REQUIRED");
+  }
+  // Invitation-created admins do not become effective until D1 has recorded
+  // the same invitation as APPLIED.  Bootstrap admins have no invitationId.
+  if (typeof record.invitationId === "string" && record.invitationId) {
+    const applied = await env.PIN_DB.prepare("SELECT 1 FROM admin_invitations WHERE invitation_id = ? AND status = 'APPLIED' AND applied_uid = ?").bind(record.invitationId, user.localId).first();
+    if (!applied) {
+      authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "invitation_not_applied" });
+      throw new Error("ADMIN_REQUIRED");
+    }
   }
   authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "success" });
   return user.localId;
@@ -183,13 +192,17 @@ async function adminManagement(env: Env, request: Request, action: string) {
     const current = await firebaseGet(env, `admins/${encodeURIComponent(user.localId!)}`, token) as { email?: string; role?: string; active?: boolean } | null;
     if (current) {
       if (current.email === email && current.role === invite.role && current.active === true) {
-        await applyInvitation(env.PIN_DB, invite, user.localId!, now);
+        // A prior attempt may have completed the Firebase write but failed
+        // before D1 recorded APPLIED.  Do not report recovery as successful
+        // until the claimed invitation is durably transitioned too.
+        if (!await applyInvitation(env.PIN_DB, invite, user.localId!, now))
+          throw new Error('INVITATION_APPLY_RETRYABLE');
         return json({ role: invite.role, linked: true, idempotent: true }, 200, cors(env, request.headers.get('origin') || ''));
       }
       await expireInvitation(env.PIN_DB, invite, now);
       throw new Error('EXISTING_ADMIN_PROTECTED');
     }
-    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, createdAt: new Date(now).toISOString(), lastLoginAt: new Date(now).toISOString() }, token);
+    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, invitationId: invite.invitation_id, createdAt: new Date(now).toISOString(), lastLoginAt: new Date(now).toISOString() }, token);
     if (!await applyInvitation(env.PIN_DB, invite, user.localId!, now)) throw new Error('INVITATION_APPLY_RETRYABLE');
     return json({ role: invite.role, linked: true }, 200, cors(env, request.headers.get('origin') || ''));
   }

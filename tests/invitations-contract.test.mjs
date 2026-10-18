@@ -19,3 +19,13 @@ test("Worker acceptance uses verified identity and keyed member storage", () => 
   assert.match(worker, /membersById/);
   assert.match(worker, /EXISTING_ADMIN_PROTECTED/);
 });
+
+test("recovered Firebase admin is not reported as accepted until D1 applies the claimed invitation", () => {
+  assert.match(worker, /if \(!await applyInvitation\(env\.PIN_DB, invite, user\.localId!, now\)\)\s*throw new Error\('INVITATION_APPLY_RETRYABLE'\);/);
+});
+
+test("invitation-created Firebase admins require the matching applied D1 invitation before authorization", () => {
+  assert.match(worker, /invitationId: invite\.invitation_id/);
+  assert.match(worker, /WHERE invitation_id = \? AND status = 'APPLIED' AND applied_uid = \?/);
+  assert.match(worker, /if \(!applied\)[\s\S]*throw new Error\("ADMIN_REQUIRED"\)/);
+});
