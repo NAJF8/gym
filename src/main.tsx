@@ -55,6 +55,7 @@ import {
   issueMemberPin,
   loginMemberWithPin,
   revokeMemberSession,
+  revokeMemberAccess,
   pinServiceConfigured,
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
@@ -624,6 +625,8 @@ function CentralDataBridge({
       const previousMembers = Array.isArray(previousForSave?.members)
         ? previousForSave.members
         : [];
+      const nextMemberIds = new Set(nextPayload.members.map((member) => member.id));
+      const deletedMembers = previousMembers.filter((member) => !nextMemberIds.has(member.id));
       const changedMembers = nextPayload.members.filter((member) => {
         const old = previousMembers.find((item) => item.id === member.id);
         return !old || JSON.stringify(old) !== JSON.stringify(member);
@@ -716,6 +719,20 @@ function CentralDataBridge({
               throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
             if (JSON.stringify(persisted) !== JSON.stringify(member))
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
+          }
+        }
+        if (deletedMembers.length) {
+          const remoteAfterDelete = await readAdminData<AppPayload>();
+          const stillPresent = deletedMembers.find((member) =>
+            normalizeMembers(remoteAfterDelete?.members).some((item) => item.id === member.id),
+          );
+          if (stillPresent)
+            throw firebaseSyncError("verify", "MEMBER_DELETE_NOT_CONFIRMED", `تعذر تأكيد حذف المشترك ${stillPresent.id} من Firebase RTDB`);
+          for (const member of deletedMembers) {
+            try {
+              const phone = memberPhoneE164(normalizeMember(member) as Member);
+              await releaseMemberPhone(phone, member.id);
+            } catch { /* no phone index to release */ }
           }
         }
         setRemotePresent(true);
@@ -1876,12 +1893,17 @@ function requestMemberSave(payload: AppPayload) {
     window.dispatchEvent(new CustomEvent("alasas-save-member", { detail: { payload, resolve } }));
   });
 }
+function requestMemberDelete(payload: AppPayload) {
+  return requestMemberSave(payload);
+}
 function MembersWithPin({exercises,members,courses,setMembers,settings}:{exercises:Exercise[];members:Member[];courses:ReadyCourse[];setMembers:React.Dispatch<React.SetStateAction<Member[]>>;settings:SettingsData}){
   const [editing,setEditing]=useState<Member|null>(null);
   const [show,setShow]=useState(false);
   const [pin,setPin]=useState('');
   const [pinBusy,setPinBusy]=useState(false);
   const [pinError,setPinError]=useState('');
+  const [deleteBusy,setDeleteBusy]=useState('');
+  const [deleteError,setDeleteError]=useState('');
   const [issueTarget,setIssueTarget]=useState<Member|null>(null);
   const [issuePhone,setIssuePhone]=useState('');
   const save=async(m:Member)=>{
@@ -1894,7 +1916,8 @@ function MembersWithPin({exercises,members,courses,setMembers,settings}:{exercis
   };
   const openIssue=(m:Member)=>{setPin('');setPinError('');setIssueTarget(m);setIssuePhone(memberPhoneDisplay(m))};
   const issue=async(m:Member,requestedPhone:string)=>{setPinBusy(true);setPinError('');setPin('');try{const phone=normalizeIraqiPhone(requestedPhone);const remote=await readAdminData<AppPayload>();const persisted=normalizeMembers(remote?.members).find(item=>item.id===m.id);if(!persisted)throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');setPin(await issueMemberPin(persisted.id,phone,persisted.membershipId||persisted.id,true));setIssueTarget(null);setIssuePhone('')}catch(e){setPinError(e instanceof Error?e.message:'تعذر إصدار PIN من الخدمة الموثوقة')}finally{setPinBusy(false)}};
-  return <><section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={()=>{setEditing(null);setShow(true)}} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>{issueTarget&&<section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e=>setIssuePhone(e.target.value)}/></label><small>المعروض: {memberPhoneDisplay(issueTarget)||'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={()=>issue(issueTarget,issuePhone)}>{pinBusy?'جارٍ الإصدار…':'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={()=>{setIssueTarget(null);setIssuePhone('')}}>إلغاء</button></div></section>}{pin&&<section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={()=>navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={()=>window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}{pinError&&<p className="auth-error" role="alert">{pinError}</p>}{members.length?<div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m)||'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button onClick={()=>setEditing(m)}><ExternalLink size={14}/>عرض</button><button onClick={()=>{setEditing(m);setShow(true)}}><Pencil size={14}/>تعديل</button><button disabled={pinBusy} onClick={()=>openIssue(m)}><Check size={14}/>إصدار / إعادة إصدار PIN</button><button onClick={()=>printMember(m,settings)}><Printer size={14}/>طباعة</button><button onClick={()=>{if(window.confirm(`حذف المشترك ${m.name}؟`))setMembers(x=>x.filter(a=>a.id!==m.id))}}><Trash2 size={14}/>حذف</button></div></td></tr>)}</tbody></table></div></div>:<Empty icon={<Users size={30}/>} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل."/>}{(show||editing)&&<MemberWizard initial={editing} exercises={exercises} onClose={()=>{setShow(false);setEditing(null)}} onSave={save} viewOnly={!show}/>}</>}
+  const removeMember=async(m:Member)=>{if(deleteBusy)return;if(!window.confirm(`حذف المشترك ${m.name}؟ سيتم إبطال PIN والجلسات بعد تأكيد Firebase.`))return;setDeleteBusy(m.id);setDeleteError('');const nextMembers=members.filter(a=>a.id!==m.id);const ok=await requestMemberDelete({schemaVersion:1,settings,exercises,members:nextMembers,courses});if(ok){try{await revokeMemberAccess(m.id)}catch(error){console.warn('[member-delete] PIN revoke endpoint unavailable or failed',error)}setMembers(nextMembers)}else{setDeleteError('تعذر تأكيد حذف المشترك من Firebase؛ بقيت البيانات كما هي. حاول مرة أخرى.')}setDeleteBusy('')};
+  return <><section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={()=>{setEditing(null);setShow(true)}} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>{issueTarget&&<section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e=>setIssuePhone(e.target.value)}/></label><small>المعروض: {memberPhoneDisplay(issueTarget)||'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={()=>issue(issueTarget,issuePhone)}>{pinBusy?'جارٍ الإصدار…':'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={()=>{setIssueTarget(null);setIssuePhone('')}}>إلغاء</button></div></section>}{pin&&<section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={()=>navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={()=>window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}{pinError&&<p className="auth-error" role="alert">{pinError}</p>}{members.length?<div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m)||'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button onClick={()=>setEditing(m)}><ExternalLink size={14}/>عرض</button><button onClick={()=>{setEditing(m);setShow(true)}}><Pencil size={14}/>تعديل</button><button disabled={pinBusy} onClick={()=>openIssue(m)}><Check size={14}/>إصدار / إعادة إصدار PIN</button><button onClick={()=>printMember(m,settings)}><Printer size={14}/>طباعة</button><button disabled={Boolean(deleteBusy)} onClick={()=>void removeMember(m)}><Trash2 size={14}/>{deleteBusy===m.id?'جارٍ الحذف…':'حذف'}</button></div></td></tr>)}</tbody></table></div></div>:<Empty icon={<Users size={30}/>} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل."/>}{deleteError&&<p className="auth-error" role="alert">{deleteError}</p>}{(show||editing)&&<MemberWizard initial={editing} exercises={exercises} onClose={()=>{setShow(false);setEditing(null)}} onSave={save} viewOnly={!show}/>}</>}
 function Members({
   exercises,
   members,

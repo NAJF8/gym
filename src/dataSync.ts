@@ -299,11 +299,20 @@ export async function writeAdminData<T>(
       .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
       .map((member) => [member.authUid as string, profile(member)]),
   );
+  const nextAuthUids = new Set(
+    nextMembers
+      .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
+      .map((member) => member.authUid as string),
+  );
   for (const member of nextMembers) {
     if (typeof member.authUid !== "string" || member.authUid.length < 20) continue;
     const next = profile(member);
     if (!same(next, oldProfiles.get(member.authUid)))
       updates[`membersByUid/${member.authUid}`] = next;
+  }
+  // Deleting from appData must also remove the private UID projection.
+  for (const [uid] of oldProfiles) {
+    if (!nextAuthUids.has(uid)) updates[`membersByUid/${uid}`] = null;
   }
 
   try {
