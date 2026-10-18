@@ -19,6 +19,8 @@ jobs:
     environment: staging
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -52,7 +54,17 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
           VITE_PIN_SERVICE_ENDPOINT: ${{ vars.VITE_PIN_SERVICE_ENDPOINT }}
         run: npm run build:staging
+      - name: Detect RTDB rules changes
+        id: rules
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && ! git diff --quiet "${{ github.event.before }}" "${{ github.sha }}" -- database.rules.json; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Deploy RTDB rules to Staging only
+        if: steps.rules.outputs.changed == 'true'
         env:
           FIREBASE_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: npx -y firebase-tools@latest deploy --only database --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}" --token "$FIREBASE_TOKEN"
