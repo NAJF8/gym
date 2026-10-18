@@ -63,6 +63,8 @@ import {
 import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
+import { safeImageUrl } from "./imageUrl";
+import { mergeExerciseLibrary } from "./exerciseLibrary";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
 
@@ -123,6 +125,7 @@ type SettingsData = {
   showWeight: boolean;
   showDate: boolean;
   accent: string;
+  printFooterNote: string;
 };
 const muscles = [
   "تمارين الصدر",
@@ -343,6 +346,7 @@ const defaults: SettingsData = {
   showWeight: true,
   showDate: true,
   accent: "#b7ff2a",
+  printFooterNote: "نتمنى لكم تمريناً آمناً ونتائج مستمرة.",
 };
 const read = <T,>(key: string, fallback: T): T => {
   try {
@@ -415,19 +419,20 @@ function normalizeSettings(value: unknown): SettingsData {
   const raw = value && typeof value === "object" ? value as Partial<SettingsData> : {};
   const coachDefault = defaults.coachPhoto;
   const hallDefault = defaults.hallPhoto;
-  const staticAsset = (candidate: unknown, fallback: string) =>
-    typeof candidate === "string" && candidate === fallback ? candidate : fallback;
-  const coachPhoto = staticAsset(raw.coachPhoto, coachDefault);
-  const hallPhoto = staticAsset(raw.hallPhoto, hallDefault);
-  const logo = staticAsset(raw.logo, defaults.logo);
+  const printableImage = (candidate: unknown, fallback: string) =>
+    safeImageUrl(candidate) || fallback;
+  const coachPhoto = printableImage(raw.coachPhoto, coachDefault);
+  const hallPhoto = printableImage(raw.hallPhoto, hallDefault);
+  const logo = printableImage(raw.logo, defaults.logo);
   return {
     ...defaults,
     ...raw,
     coachPhoto,
     hallPhoto,
     logo,
-    printCoachPhotoUrl: staticAsset(raw.printCoachPhotoUrl, coachPhoto),
-    printHallPhotoUrl: staticAsset(raw.printHallPhotoUrl, hallPhoto),
+    printCoachPhotoUrl: printableImage(raw.printCoachPhotoUrl, coachPhoto),
+    printHallPhotoUrl: printableImage(raw.printHallPhotoUrl, hallPhoto),
+    printFooterNote: typeof raw.printFooterNote === "string" ? raw.printFooterNote.slice(0, 500) : defaults.printFooterNote,
   };
 }
 function normalizeMembers(value: unknown): Member[] {
@@ -668,7 +673,7 @@ function CentralDataBridge({
     courses,
   };
   const imageSource = (value: string, fallback = "") =>
-    /^(?:https?:\/\/|\/)/i.test(value) && !/^data:/i.test(value) ? value : fallback;
+    safeImageUrl(value) || (value.startsWith("/") ? value : fallback);
   const remoteSettings = {
     ...settings,
     logo: imageSource(settings.logo, defaults.logo),
@@ -1169,13 +1174,13 @@ function Categories({
   const [muscle, setMuscle] = useState(muscles[0]);
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
   const list = exercises.filter((e) => e.muscle === muscle);
   const importSuggestions = () => {
     setExercises((current) => {
-      const existing = new Set(current.map((e) => e.id));
-      const existingNames = new Set(current.map((e) => `${normalizeMuscle(e.muscle)}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
-      const additions = suggestedExercises.filter((e) => !existing.has(e.id) && !existingNames.has(`${e.muscle}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
-      return additions.length ? [...current, ...additions] : current;
+      const result = mergeExerciseLibrary(current, suggestedExercises);
+      setImportMessage(result.added ? `تمت إضافة ${result.added} تمريناً عربياً جديداً؛ ستُزامن مع Firebase دون تغيير تمارينك أو كورساتك الحالية.` : "المكتبة العربية موجودة بالفعل؛ لم تُكرر أي تمرين.");
+      return result.exercises;
     });
   };
   const save = (e: Exercise) => {
@@ -1193,7 +1198,7 @@ function Categories({
           <h2>مكتبة التمارين</h2>
           <p>المصدر الموحد للتمارين المستخدمة في الكورسات والباركودات.</p>
         </div>
-        <div className="exercise-library-actions"><Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة التمارين الافتراضية</Button><Button
+        <div className="exercise-library-actions"><Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة/استكمال المكتبة العربية</Button><Button
           onClick={() => {
             setEditing(null);
             setShow(true);
@@ -1203,6 +1208,7 @@ function Categories({
           إضافة تمرين
         </Button></div>
       </section>
+      {importMessage && <p className="save-status library-import-status" role="status">{importMessage}</p>}
       <div className="library-layout">
         <aside className="muscle-list">
           <h3>الأقسام</h3>
@@ -2614,6 +2620,12 @@ function SettingsPage({
   };
   const save = () => {
     if (saveState === "saving" || !firebaseConfigured) return;
+    const images = [s.logo, s.printCoachPhotoUrl, s.printHallPhotoUrl];
+    if (images.some((value) => value && !safeImageUrl(value) && !value.startsWith("/"))) {
+      setSaveState("error");
+      setSaveMessage("تحقق من روابط الصور: يُسمح برابط HTTPS مباشر أو ملف الاستضافة الحالي فقط.");
+      return;
+    }
     window.dispatchEvent(new Event("alasas-save-settings"));
   };
   return (
@@ -2667,13 +2679,14 @@ function SettingsPage({
         </div>
       </section>
       <section className="settings-block">
-        <h2>الصور الثابتة</h2>
-        <p>صور الكابتن والقاعة تُدار كملفات ثابتة داخل <code>public/assets/</code> وتُنشر عبر Firebase Hosting. لا يوجد رفع أو حفظ صور من لوحة الإدارة في هذا الإصدار.</p>
+        <h2>هوية الطباعة</h2>
+        <p>ضع روابط صور HTTPS مباشرة للّوغو وصورة الكابتن. تُحفظ مع الإعدادات وتظهر في طباعة A4؛ لا تقبل الصفحة روابط غير آمنة أو بيانات صورة من المتصفح.</p>
         <div className="upload-grid">
-          <StaticAsset label="شعار القاعة" value={s.logo} />
-          <StaticAsset label="صورة الكابتن (افتراضية مؤقتة)" value={s.coachPhoto} />
-          <StaticAsset label="صورة القاعة (افتراضية مؤقتة)" value={s.hallPhoto} />
+          <ImageSetting label="شعار القاعة للطباعة" value={s.logo} onChange={(value) => update("logo", value)} />
+          <ImageSetting label="صورة/لوجو الكابتن للطباعة" value={s.printCoachPhotoUrl} onChange={(value) => update("printCoachPhotoUrl", value)} />
+          <ImageSetting label="صورة خلفية القاعة للطباعة" value={s.printHallPhotoUrl} onChange={(value) => update("printHallPhotoUrl", value)} />
         </div>
+        <label className="print-footer-note">النص الختامي للمشترك<textarea maxLength={500} value={s.printFooterNote} onChange={(e) => update("printFooterNote", e.target.value)} placeholder="تعليمات الكابتن أو رسالة ختامية" /></label>
       </section>
       <section className="settings-block">
         <h2>قالب الطباعة</h2>
@@ -2737,19 +2750,23 @@ function SettingsPage({
     </div>
   );
 }
-function StaticAsset({
+function ImageSetting({
   label,
   value,
+  onChange,
 }: {
   label: string;
   value: string;
+  onChange: (value: string) => void;
 }) {
+  const valid = !value || Boolean(safeImageUrl(value));
   return (
-    <div className="upload-box static-asset">
+    <label className="upload-box static-asset">
       {value && <img src={value} alt="" />}
       <span>{label}</span>
-      <small>المسار: {value}</small>
-    </div>
+      <input type="url" dir="ltr" value={value} onChange={(event) => onChange(event.target.value)} placeholder="https://example.com/logo.webp" />
+      <small>{valid ? "رابط HTTPS آمن أو ملف الاستضافة الحالي" : "يجب أن يكون الرابط HTTPS آمناً"}</small>
+    </label>
   );
 }
 function Modal({
@@ -2798,9 +2815,10 @@ function printMember(m: Member, s: SettingsData) {
   const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="num">${n + 1}</td><td class="exercise-name"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></td><td>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
+  const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
   const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
     @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span></footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
+  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span>${footerNote ? `<span>${footerNote}</span>` : ""}</footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
   const w = window.open("", "_blank");
   if (!w) return;
   w.document.write(html);
