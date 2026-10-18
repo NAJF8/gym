@@ -557,7 +557,7 @@ function Sidebar({
     <aside className="sidebar">
       <Logo s={s} />
       <nav>
-        {role === "SUPER_ADMIN" && (
+        {(
           <button
             className={`nav-item ${page === "settings" ? "active" : ""}`}
             onClick={() => {
@@ -1052,7 +1052,24 @@ function App({
                 />
               )}{" "}
               {page === "settings" && (
-                <SettingsPage s={settings} setS={setSettings} />
+                role === "SUPER_ADMIN" ? (
+                  <SettingsPage s={settings} setS={setSettings} />
+                ) : (
+                  <div className="settings-page">
+                    <section className="settings-block">
+                      <h2>إعدادات الموقع وهوية الطباعة</h2>
+                      <p>يمكنك الاطلاع على الإعدادات بصلاحية المدير. تعديل الإعدادات وحفظها يتطلب صلاحية Super Admin لحماية بيانات القاعة.</p>
+                      <div className="form-grid">
+                        <label>اسم القاعة<input value={settings.gymName} readOnly /></label>
+                        <label>اسم الكابتن<input value={settings.coachName} readOnly /></label>
+                        <label>شعار القاعة للطباعة<input value={settings.logo} readOnly dir="ltr" /></label>
+                        <label>صورة/لوجو الكابتن للطباعة<input value={settings.printCoachPhotoUrl} readOnly dir="ltr" /></label>
+                        <label>صورة خلفية القاعة للطباعة<input value={settings.printHallPhotoUrl} readOnly dir="ltr" /></label>
+                      </div>
+                      <label>معلومات نهاية ملف الطباعة<textarea value={settings.printFooterNote} readOnly /></label>
+                    </section>
+                  </div>
+                )
               )}
               {page === "admins" && role === "SUPER_ADMIN" && <AdminManagementPage />}
             </main>
