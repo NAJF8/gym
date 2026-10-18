@@ -74,3 +74,13 @@ export async function revokeMemberSession(sessionToken: string) {
     headers: { authorization: `Bearer ${sessionToken}` },
   })
 }
+
+export async function revokeMemberAccess(memberId: string) {
+  if (!memberId) return
+  const token = await requireFreshAdminToken()
+  await request('/v1/admin/member-revoke', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ memberId }),
+  })
+}
