@@ -238,3 +238,19 @@ test('concurrent member deletions preserve unrelated members and a concurrent cr
   assert.deepEqual(ids, ['race-c', 'race-new'])
 })
 
+test('active admin writes enforce bounded member, course, exercise, and tombstone payloads', async () => {
+  const db = verifiedContext('manager').database()
+  await assertFails(set(ref(db, 'appData/membersById/oversized-member'), {
+    id: 'oversized-member', version: 1, name: 'x'.repeat(201),
+  }))
+  await assertFails(set(ref(db, 'appData/deletedMemberIds/oversized-tombstone'), {
+    deletedAt: 'x'.repeat(65), version: 1,
+  }))
+  await assertFails(set(ref(db, 'appData/exercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
+  await assertFails(set(ref(db, 'publicExercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
+})
+
