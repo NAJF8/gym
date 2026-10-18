@@ -2775,13 +2775,14 @@ class UiErrorBoundary extends Component<
     );
   }
 }
-const adminRoute = location.pathname.replace(/\/+$/, "").endsWith("/admin");
+const adminRoute = window.location.pathname.replace(/\/+$/, "").endsWith("/admin");
+const exerciseRoute = /^#\/exercise\/[^/]+/.test(window.location.hash);
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <UiErrorBoundary>
       {adminRoute ? (
         <AdminGate />
-      ) : location.hash.startsWith("#/exercise/") ? (
+      ) : exerciseRoute ? (
         <App role="MANAGER" onSignOut={() => {}} />
       ) : (
         <MemberPinGate />
