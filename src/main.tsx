@@ -625,6 +625,8 @@ function CentralDataBridge({
       const previousMembers = Array.isArray(previousForSave?.members)
         ? previousForSave.members
         : [];
+      const nextMemberIds = new Set(nextPayload.members.map((member) => member.id));
+      const deletedMembers = previousMembers.filter((member) => !nextMemberIds.has(member.id));
       const changedMembers = nextPayload.members.filter((member) => {
         const old = previousMembers.find((item) => item.id === member.id);
         return !old || JSON.stringify(old) !== JSON.stringify(member);
@@ -717,6 +719,20 @@ function CentralDataBridge({
               throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
             if (JSON.stringify(persisted) !== JSON.stringify(member))
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
+          }
+        }
+        if (deletedMembers.length) {
+          const remoteAfterDelete = await readAdminData<AppPayload>();
+          const stillPresent = deletedMembers.find((member) =>
+            normalizeMembers(remoteAfterDelete?.members).some((item) => item.id === member.id),
+          );
+          if (stillPresent)
+            throw firebaseSyncError("verify", "MEMBER_DELETE_NOT_CONFIRMED", `تعذر تأكيد حذف المشترك ${stillPresent.id} من Firebase RTDB`);
+          for (const member of deletedMembers) {
+            try {
+              const phone = memberPhoneE164(normalizeMember(member) as Member);
+              await releaseMemberPhone(phone, member.id);
+            } catch { /* no phone index to release */ }
           }
         }
         setRemotePresent(true);
