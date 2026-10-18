@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing'
-import { get, ref, set, update } from 'firebase/database'
+import { get, ref, runTransaction, set, update } from 'firebase/database'
 
 const rules = await readFile(new URL('../database.rules.json', import.meta.url), 'utf8')
 const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'gym1-4f1bb'
@@ -112,11 +112,13 @@ test('manager can use appData but cannot modify admin roles', async () => {
 
 test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {
   const manager = verifiedContext('manager').database()
+  await assertSucceeds(get(ref(manager, 'deletedMemberIds')))
   await assertSucceeds(set(ref(manager, 'deletedMemberIds/synthetic-delete-test'), { deletedAt: '2026-10-18T00:00:00.000Z' }))
   const marker = await assertSucceeds(get(ref(manager, 'deletedMemberIds/synthetic-delete-test')))
   assert.equal(marker.val().deletedAt, '2026-10-18T00:00:00.000Z')
   await assertFails(get(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/synthetic-delete-test')))
   await assertFails(set(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/unauthorized-test'), { deletedAt: 'now' }))
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'deletedMemberIds')))
 })
 
 test('super admin cannot change their own admin record', async () => {
@@ -169,5 +171,34 @@ test('member creation and program update sync between two authorized sessions', 
 
   const unauthorizedSession = verifiedContext('memberA').database()
   await assertFails(get(ref(unauthorizedSession, 'appData/members/synthetic-member-001')))
+})
+
+test('active admins can atomically reserve member phone index while unauthorized users cannot', async () => {
+  const manager = verifiedContext('manager').database()
+  const phonePath = 'memberPhoneIndex/%2B96478000000888'
+  const reservation = await assertSucceeds(runTransaction(ref(manager, phonePath), current => current === null ? 'synthetic-member-phone-001' : undefined))
+  assert.equal(reservation.committed, true)
+  assert.equal(reservation.snapshot.val(), 'synthetic-member-phone-001')
+
+  const unauthenticated = env.unauthenticatedContext().database()
+  await assertFails(runTransaction(ref(unauthenticated, 'memberPhoneIndex/%2B96478000000889'), current => current === null ? 'blocked' : undefined))
+  const inactive = verifiedContext('inactive').database()
+  await assertFails(runTransaction(ref(inactive, 'memberPhoneIndex/%2B96478000000890'), current => current === null ? 'blocked' : undefined))
+})
+
+test('manager can write the same parent array path used by the admin sync bridge', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(update(ref(manager), {
+    'appData/members': [
+      { id: 'synthetic-parent-001', name: 'مشترك اختباري', active: true, days: [] },
+    ],
+    'publicExercises/bench-press/id': 'bench-press',
+    'publicExercises/bench-press/name': 'بنش برس',
+    'publicExercises/bench-press/muscle': 'تمارين الصدر',
+    'publicExercises/bench-press/sets': 4,
+    'publicExercises/bench-press/reps': '8–10',
+    'publicExercises/bench-press/rest': '90 ثانية',
+    'publicExercises/bench-press/video': '',
+  }))
 })
 
