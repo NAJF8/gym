@@ -644,7 +644,7 @@ function CentralDataBridge({
         : [];
       const changedMembers = nextPayload.members.filter((member) => {
         const old = previousMembers.find((item) => item.id === member.id);
-        return !old || JSON.stringify(old) !== JSON.stringify(member);
+        return !old || stableJson(normalizeMember(old)) !== stableJson(member);
       });
       const claimedPhones: Array<{ phone: string; memberId: string; oldPhone?: string }> = [];
       for (const member of changedMembers) {
@@ -731,7 +731,7 @@ function CentralDataBridge({
             const persisted = await readAdminMember<Member>(member.id);
             if (!persisted)
               throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
-            if (stableJson(persisted) !== stableJson(member))
+            if (stableJson(normalizeMember(persisted)) !== stableJson(member))
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
           }
         }

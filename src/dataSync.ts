@@ -184,7 +184,7 @@ export async function deleteAdminMember(memberId: string) {
 
 export async function readAdminMember<T>(memberId: string) {
   const data = await readAdminData<{ members?: unknown }>();
-  const members = Array.isArray(data?.members) ? data.members : [];
+  const members = collectionItems(data?.members);
   return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
 }
 
