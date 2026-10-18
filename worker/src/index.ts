@@ -129,8 +129,13 @@ async function readMember(env: Env, memberId: string) {
   const token = await serviceAccessToken(env);
   const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(memberId)}`, token);
   if (tombstone) throw new Error("MEMBER_DELETED");
-  const appData = await firebaseGet(env, "appData", token) as { members?: Array<Record<string, unknown>>; courses?: Array<Record<string, unknown>>; exercises?: Array<Record<string, unknown>> } | null;
-  const member = appData?.members?.find(item => item.id === memberId);
+  const appData = await firebaseGet(env, "appData", token) as { members?: unknown; courses?: unknown; exercises?: unknown } | null;
+  const members = Array.isArray(appData?.members)
+    ? appData.members
+    : appData?.members && typeof appData.members === "object"
+      ? Object.values(appData.members as Record<string, Record<string, unknown>>)
+      : [];
+  const member = members.find(item => item && typeof item === "object" && item.id === memberId) as Record<string, unknown> | undefined;
   if (!member) throw new Error("MEMBER_NOT_FOUND");
   return { member, appData, token };
 }
