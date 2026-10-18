@@ -83,6 +83,13 @@ async function firebaseGet(env: Env, path: string, accessToken: string) {
   return response.json();
 }
 
+async function firebaseWrite(env: Env, path: string, value: unknown, accessToken: string, method: 'PUT' | 'PATCH' = 'PUT') {
+  const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, '') + '/' + path.replace(/^\//, '') + '.json';
+  const response = await fetch(url, { method, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  if (!response.ok) throw new Error('Firebase write failed');
+  return response.json();
+}
+
 async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
   const url = env.FIREBASE_DATABASE_URL.replace(/\/$/, "") + "/" + path.replace(/^\//, "") + ".json?auth=" + encodeURIComponent(idToken);
   const response = await fetch(url);
@@ -123,6 +130,66 @@ async function verifyAdmin(env: Env, request: Request) {
   }
   authDiagnostics(env, { authorizationPresent: true, tokenAcquired: true, lookupHttpStatus: lookup.status, authFailureStage: "success" });
   return user.localId;
+}
+
+async function verifiedGoogleUser(env: Env, request: Request) {
+  const idToken = bearerToken(request);
+  if (!idToken) throw new Error('AUTH_REQUIRED');
+  const lookup = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(env.FIREBASE_WEB_API_KEY), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
+  if (!lookup.ok) throw new Error('AUTH_REQUIRED');
+  const account = await lookup.json() as { users?: Array<{ localId?: string; email?: string; displayName?: string; emailVerified?: boolean; providerUserInfo?: Array<{ providerId?: string }> }> };
+  const user = account.users?.[0];
+  if (!user?.localId || !user.email || user.emailVerified !== true || !user.providerUserInfo?.some(item => item.providerId === 'google.com')) throw new Error('ADMIN_REQUIRED');
+  return { ...user, idToken };
+}
+
+async function emailKey(email: string) { return encodeBase64Url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase()))); }
+
+async function adminManagement(env: Env, request: Request, action: string) {
+  if (action === 'accept') {
+    const user = await verifiedGoogleUser(env, request); const token = await serviceAccessToken(env); const email = user.email!.trim().toLowerCase(); const key = await emailKey(email);
+    const invite = await firebaseGet(env, `pendingAdminInvites/${key}`, token) as { email?: string; role?: string; status?: string } | null;
+    if (!invite || invite.status !== 'PENDING' || invite.email !== email) throw new Error('INVITATION_NOT_FOUND');
+    const now = new Date().toISOString();
+    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, createdAt: now, lastLoginAt: now }, token);
+    await firebaseWrite(env, `pendingAdminInvites/${key}`, { ...invite, status: 'ACCEPTED', acceptedUid: user.localId, acceptedAt: now }, token);
+    await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: 'INVITE_ACCEPTED', email, role: invite.role, acceptedUid: user.localId, createdAt: now }, token);
+    return json({ role: invite.role, linked: true }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  const actorUid = await verifyAdmin(env, request);
+  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string } | null;
+  if (actor?.role !== 'SUPER_ADMIN') throw new Error('SUPER_ADMIN_REQUIRED');
+  const token = await serviceAccessToken(env);
+  if (action === 'list') {
+    const admins = await firebaseGet(env, 'admins', token) as Record<string, Record<string, unknown>> | null;
+    const invites = await firebaseGet(env, 'pendingAdminInvites', token) as Record<string, Record<string, unknown>> | null;
+    const rows = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt })).filter(row => row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
+    for (const invite of Object.values(invites || {})) if (invite.status === 'PENDING') rows.push({ email: String(invite.email || ''), displayName: '', role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
+    return json({ admins: rows }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  if (action === 'invite') {
+    const body = await request.json() as { email?: unknown; role?: unknown };
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const role = body.role === 'MANAGER' || body.role === 'SUPER_ADMIN' ? body.role : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !role) throw new Error('INVITATION_INVALID');
+    const key = await emailKey(email); const now = new Date().toISOString();
+    await firebaseWrite(env, `pendingAdminInvites/${key}`, { email, role, status: 'PENDING', createdAt: now, createdBy: actorUid }, token);
+    await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: 'INVITE_CREATED', email, role, actorUid, createdAt: now }, token);
+    return json({ invitationId: key }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  const body = await request.json() as { uid?: unknown; action?: unknown; role?: unknown; active?: unknown };
+  if (typeof body.uid !== 'string' || !['role', 'active', 'remove'].includes(String(body.action))) throw new Error('ADMIN_UPDATE_INVALID');
+  if (body.uid === actorUid) throw new Error('SELF_CHANGE_FORBIDDEN');
+  const target = await firebaseGet(env, `admins/${encodeURIComponent(body.uid)}`, token) as { role?: string; active?: boolean; email?: string } | null;
+  if (!target) throw new Error('ADMIN_NOT_FOUND');
+  if (target.role === 'SUPER_ADMIN' && (body.action === 'remove' || body.active === false)) {
+    const admins = await firebaseGet(env, 'admins', token) as Record<string, { role?: string; active?: boolean }> | null;
+    if (Object.values(admins || {}).filter(item => item.role === 'SUPER_ADMIN' && item.active === true).length <= 1) throw new Error('LAST_SUPER_ADMIN');
+  }
+  const value = body.action === 'remove' ? null : { ...target, ...(body.action === 'role' && (body.role === 'MANAGER' || body.role === 'SUPER_ADMIN') ? { role: body.role } : {}), ...(body.action === 'active' && typeof body.active === 'boolean' ? { active: body.active } : {}) };
+  await firebaseWrite(env, `admins/${encodeURIComponent(body.uid)}`, value, token);
+  await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: `ADMIN_${String(body.action).toUpperCase()}`, targetUid: body.uid, actorUid, createdAt: new Date().toISOString() }, token);
+  return json({ ok: true }, 200, cors(env, request.headers.get('origin') || ''));
 }
 
 async function readMember(env: Env, memberId: string) {
@@ -301,6 +368,7 @@ export default {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
       if (url.pathname === "/v1/admin/member-revoke") return await revokeMember(env, request);
+      if (url.pathname.startsWith('/v1/admin/management/')) return await adminManagement(env, request, url.pathname.split('/').pop() || '');
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);

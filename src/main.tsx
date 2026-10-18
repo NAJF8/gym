@@ -60,6 +60,7 @@ import {
   pinServiceConfigured,
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
+import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
@@ -400,7 +401,8 @@ type Page =
   | "barcodes"
   | "courses"
   | "members"
-  | "settings";
+  | "settings"
+  | "admins";
 function Logo({ s }: { s: SettingsData }) {
   return (
     <div className="brand">
@@ -508,7 +510,7 @@ function Sidebar({
           </button>
         ))}
         {role === "SUPER_ADMIN" && (
-          <button className="nav-item" type="button">
+          <button className={`nav-item ${page === "admins" ? "active" : ""}`} type="button" onClick={() => { setPage("admins"); close(); }}>
             <Users size={17} />
             <span>المدراء والصلاحيات</span>
           </button>
@@ -898,6 +900,7 @@ function App({
     courses: "الكورسات الجاهزة",
     members: "المشتركون",
     settings: "إعدادات الموقع",
+    admins: "المدراء والصلاحيات",
   }[page];
   return (
     <div
@@ -968,6 +971,7 @@ function App({
               {page === "settings" && (
                 <SettingsPage s={settings} setS={setSettings} />
               )}
+              {page === "admins" && role === "SUPER_ADMIN" && <AdminManagementPage />}
             </main>
           </div>
         </>
@@ -1010,6 +1014,13 @@ function AdminGate() {
     setUser(nextUser);
     setAuthReady(true);
   }), []);
+  useEffect(() => {
+    if (!user) return;
+    // A pending invitation is consumed only after Firebase has authenticated
+    // the matching, verified Google identity. Existing admins simply get a
+    // not-found response and continue through the normal record watcher.
+    void acceptAdminInvitation().then(() => user.getIdToken(true)).catch(() => undefined);
+  }, [user]);
   useEffect(
     () => {
       if (!user) {
@@ -1939,6 +1950,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
   const [editing, setEditing] = useState<Member | null>(null);
   const [show, setShow] = useState(false);
   const [pin, setPin] = useState('');
+  const [pinMember, setPinMember] = useState<Member | null>(null);
   const [pinBusy, setPinBusy] = useState(false);
   const [pinError, setPinError] = useState('');
   const [issueTarget, setIssueTarget] = useState<Member | null>(null);
@@ -1969,7 +1981,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
       const remote = await readAdminData<AppPayload>();
       const persisted = normalizeMembers(remote?.members).find(item => item.id === m.id);
       if (!persisted) throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');
-      setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true));
+    setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true)); setPinMember(persisted);
       setIssueTarget(null); setIssuePhone('');
     } catch (e) { setPinError(e instanceof Error ? e.message : 'تعذر إصدار PIN من الخدمة الموثوقة'); }
     finally { setPinBusy(false); }
@@ -1999,7 +2011,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
     {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
     {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone)}>{pinBusy ? 'جارٍ الإصدار…' : 'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
-    {pin && <section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}
+    {pin && <section className="pin-card" role="status" aria-label="بطاقة رمز الدخول"><header><b>✓ تم إصدار رمز الدخول بنجاح</b><button className="icon-btn" aria-label="إغلاق بطاقة PIN" onClick={() => { setPin(''); setPinMember(null); }}><X size={17}/></button></header><div className="pin-card-meta"><span>المشترك: <b>{pinMember?.name || '—'}</b></span><span>رقم العضوية: <b>{pinMember?.membershipId || '—'}</b></span></div><p>رمز الدخول الخاص بك</p><strong dir="ltr">{pin.split('').join('  ')}</strong><div><button className="primary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة البطاقة</button><button className="secondary-btn" onClick={() => { setPin(''); setPinMember(null); }}>إغلاق</button></div><small>🔒 يظهر هذا الرمز مرة واحدة فقط، ولا يُحفظ في المتصفح أو Firebase.</small></section>}
     {pinError && <p className="auth-error" role="alert">{pinError}</p>}
     {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إصدار / إعادة إصدار PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
     {(show || editing) && <MemberWizard initial={editing} exercises={exercises} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
@@ -2465,6 +2477,14 @@ function PublicExerciseDetail({
       </section>
     </main>
   );
+}
+function AdminManagementPage() {
+  const [admins, setAdmins] = useState<ManagedAdmin[]>([]); const [email, setEmail] = useState(''); const [role, setRole] = useState<ManagedAdmin['role']>('MANAGER'); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
+  const refresh = () => void listManagedAdmins().then(result => setAdmins(result.admins)).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل المدراء'));
+  useEffect(() => { refresh(); void acceptAdminInvitation().catch(() => undefined); }, []);
+  const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(email, role); setEmail(''); setMessage('تم إنشاء دعوة محددة الصلاحية. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
+  const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; try { await updateManagedAdmin(item.uid || '', action, action === 'role' ? (item.role === 'MANAGER' ? 'SUPER_ADMIN' : 'MANAGER') : undefined, value); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
+  return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والصلاحيات</h2><p>الدعوات لا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة مدير</h3><div className="form-grid"><label>البريد الإلكتروني<input dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="manager@example.com" /></label><label>نوع الصلاحية<select value={role} onChange={e => setRole(e.target.value as ManagedAdmin['role'])}><option value="MANAGER">MANAGER</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></label></div><Button onClick={add} icon={<Plus size={16} />}>{busy ? 'جارٍ الإنشاء…' : 'إضافة المدير'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المدير</th><th>الدور</th><th>الحالة</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td><b>{item.displayName || '—'}</b><div dir="ltr">{item.email}</div></td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.createdAt ? new Date(item.createdAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا يوجد مدراء إضافيون" text="أنشئ دعوة اختبارية من النموذج أعلاه." />}</section></div>;
 }
 function SettingsPage({
   s,
