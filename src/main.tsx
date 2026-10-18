@@ -70,7 +70,7 @@ function MemberPinGate(){
   const [pin,setPin]=useState('');
   const signOut=async()=>{const token=sessionToken;setSessionToken('');setMember(null);try{await revokeMemberSession(token)}catch{}}
   if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;
-  if(!member)return <main className="auth-page"><Logo s={defaults}/><section className="panel auth-card"><span className="status">● تسجيل المشترك: هاتف + PIN</span><h1>بوابة المشترك</h1><p>أدخل رقم الهاتف والرمز الرباعي الذي أصدره المدرب. الرمز لا يُخزّن في المتصفح أو Firebase.</p><label>رقم الهاتف<input inputMode="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)}/></label><label>PIN من 4 أرقام<input inputMode="numeric" autoComplete="one-time-code" maxLength={4} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,4))}/></label><Button onClick={async()=>{setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken)}else if(result.member&&result.sessionToken){setMember(result.member as Member);setSessionToken(result.sessionToken)}else throw new Error('جلسة المشترك غير صالحة')}catch(e){setError(e instanceof Error?e.message:'تعذر تسجيل الدخول')}finally{setBusy(false)}}}>{busy?'جارٍ التحقق…':'تسجيل الدخول'}</Button>{error&&<p className="auth-error" role="alert">{error}</p>}<p className="auth-help">Google مخصص للمدراء فقط. لا تحاول اختيار عضوية أو رقم هاتف آخر من الواجهة.</p></section></main>;
+  if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||pin.length!==4||!phone.trim())return;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken)}else if(result.member&&result.sessionToken){setMember(result.member as Member);setSessionToken(result.sessionToken)}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><input id="member-pin" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,4))}/><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
   return <MemberPortal s={defaults} member={member} onSignOut={signOut}/>;
 }
 type Exercise = {
@@ -526,7 +526,7 @@ function Sidebar({
 function Topbar({ title, onMenu }: { title: string; onMenu: () => void }) {
   return (
     <header className="topbar">
-      <button className="icon-btn mobile-menu" onClick={onMenu}>
+      <button className="icon-btn mobile-menu" type="button" aria-label="فتح قائمة الإدارة" onClick={onMenu}>
         <Menu size={20} />
       </button>
       <div>
@@ -2333,12 +2333,9 @@ function MemberPortal({
                 {e.sets} × {e.reps}
               </strong>
               <span>راحة {e.rest}</span>
-              <a
-                href={safeVideoUrl(e.video) || exerciseUrl(e.id)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <ExternalLink size={15} />
+              <a className="portal-exercise-link" href={exerciseUrl(e.id)} target="_blank" rel="noopener noreferrer" aria-label={`اضغط لعرض التمرين: ${e.name}`}>
+                <QRCodeSVG value={exerciseUrl(e.id)} size={52} includeMargin level="M" />
+                <span>اضغط لعرض التمرين <ExternalLink size={14}/></span>
               </a>
             </div>
           ))}
