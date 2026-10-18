@@ -110,6 +110,15 @@ test('manager can use appData but cannot modify admin roles', async () => {
   await assertFails(set(ref(db, 'admins/new-manager'), { role: 'MANAGER', active: true, email: 'new@example.test' }))
 })
 
+test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(set(ref(manager, 'deletedMemberIds/synthetic-delete-test'), { deletedAt: '2026-10-18T00:00:00.000Z' }))
+  const marker = await assertSucceeds(get(ref(manager, 'deletedMemberIds/synthetic-delete-test')))
+  assert.equal(marker.val().deletedAt, '2026-10-18T00:00:00.000Z')
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/synthetic-delete-test')))
+  await assertFails(set(ref(env.unauthenticatedContext().database(), 'deletedMemberIds/unauthorized-test'), { deletedAt: 'now' }))
+})
+
 test('super admin cannot change their own admin record', async () => {
   const db = verifiedContext('super').database()
   await assertFails(set(ref(db, 'admins/super'), { role: 'MANAGER', active: false }))
