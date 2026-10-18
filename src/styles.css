@@ -130,17 +130,19 @@ html,body,#root{max-width:100%;overflow-x:hidden}
  .portal-exercise-link>span{white-space:normal}
 }
 
-/* Independent overlay: iOS Safari menu reliability */
-.sidebar-wrap{isolation:isolate}
-.sidebar-mobile-close{display:none}
+/* Mobile drawer lives in a body portal so page stacking and clipping cannot cover it. */
 @media(max-width:700px){
- .sidebar-wrap{z-index:9999!important;position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;display:block!important;visibility:hidden;pointer-events:none!important}
- .sidebar-wrap.open{visibility:visible!important;background:rgba(15,20,12,.65)!important;pointer-events:auto!important}
- .sidebar-wrap>div{position:absolute!important;right:0!important;top:0!important;bottom:0!important;width:min(310px,84vw)!important;height:100dvh!important;transform:translate3d(105%,0,0)!important;transition:transform .22s ease!important;background:#151715;box-shadow:-14px 0 34px #0003;pointer-events:auto}
- .sidebar-wrap.open>div{transform:translate3d(0,0,0)!important}
- .sidebar-wrap .sidebar{width:100%!important;height:100dvh!important}
- .sidebar-mobile-close{display:grid;place-items:center;position:absolute;left:14px;top:18px;width:43px;height:43px;border-radius:50%;background:#fff;color:#141a14;z-index:3}
+ .sidebar-wrap{position:fixed!important;inset:0!important;z-index:10000!important;width:100vw!important;height:100vh!important;height:100dvh!important;display:block!important;visibility:hidden;opacity:0;pointer-events:none;background:transparent;transition:opacity .18s ease,visibility .18s ease}
+ .sidebar-wrap.open{visibility:visible;opacity:1;pointer-events:auto;background:rgba(15,20,12,.62)}
+ .sidebar-wrap>.sidebar-drawer{position:absolute!important;inset:0 0 0 auto!important;width:min(320px,86vw)!important;height:100vh!important;height:100dvh!important;max-height:100dvh;padding-bottom:env(safe-area-inset-bottom);transform:translate3d(105%,0,0);transition:transform .22s ease;will-change:transform;pointer-events:auto;overflow:hidden;background:#151715;box-shadow:-14px 0 34px #0003;touch-action:pan-y}
+ .sidebar-wrap.open>.sidebar-drawer{transform:translate3d(0,0,0)}
+ .sidebar-wrap .sidebar{position:relative!important;inset:auto!important;right:auto!important;width:100%!important;height:100%!important;min-height:0!important;overflow:hidden!important}
+ .sidebar-wrap .sidebar nav{min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+ .sidebar-wrap .nav-item{min-height:48px;touch-action:manipulation}
+ .sidebar-wrap>.sidebar-mobile-close{display:grid;place-items:center;position:absolute;left:min(350px,calc(86vw + 14px));right:auto;top:max(14px,env(safe-area-inset-top));width:44px;height:44px;border-radius:50%;background:#fff;color:#141a14;z-index:2;touch-action:manipulation}
+ .sidebar-wrap:not(.open)>.sidebar-mobile-close{visibility:hidden;pointer-events:none}
 }
+@media(min-width:701px){.sidebar-wrap{visibility:visible!important;opacity:1!important}.sidebar-wrap>.sidebar-drawer{height:100%}}
 .admin-login-page{padding:0!important;background:#eef1e9!important;min-height:100dvh}
 .admin-login-layout{width:min(1080px,100%);min-height:min(720px,100dvh);display:grid;grid-template-columns:1fr 1fr;align-items:stretch;background:#fff;box-shadow:0 24px 65px #1e271f14;border-radius:24px;overflow:hidden}
 .admin-login-intro{padding:clamp(34px,5vw,70px);background:#151c14;color:#fff;display:flex;flex-direction:column;justify-content:center;gap:23px;position:relative}

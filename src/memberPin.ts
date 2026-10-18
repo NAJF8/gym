@@ -56,6 +56,15 @@ export async function issueMemberPin(memberId: string, phone: string, membership
   return result.pin
 }
 
+export async function revokeMemberAccess(memberId: string) {
+  const token = await requireFreshAdminToken()
+  await request<{ ok: true; access: 'revoked' }>('/v1/admin/member-revoke', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ memberId }),
+  })
+}
+
 export async function loginMemberWithPin(phone: string, pin: string) {
   if (!/^\d{4}$/.test(pin)) throw new Error('PIN يجب أن يتكون من 4 أرقام')
   const result = await request<{ member?: MemberPinProfile; sessionToken?: string; customToken?: string }>('/v1/member/login', {
@@ -72,15 +81,5 @@ export async function revokeMemberSession(sessionToken: string) {
   await request('/v1/member/logout', {
     method: 'POST',
     headers: { authorization: `Bearer ${sessionToken}` },
-  })
-}
-
-export async function revokeMemberAccess(memberId: string) {
-  if (!memberId) return
-  const token = await requireFreshAdminToken()
-  await request('/v1/admin/member-revoke', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
-    body: JSON.stringify({ memberId }),
   })
 }

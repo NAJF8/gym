@@ -48,6 +48,7 @@ import {
   watchAdminData,
   watchPublicExercise,
   writeAdminData,
+  deleteAdminMember,
   reserveMemberPhone,
   releaseMemberPhone,
 } from "./dataSync";
@@ -525,10 +526,10 @@ function Sidebar({
     </aside>
   );
 }
-function Topbar({ title, onMenu }: { title: string; onMenu: () => void }) {
+function Topbar({ title, onMenu, menuOpen }: { title: string; onMenu: () => void; menuOpen: boolean }) {
   return (
     <header className="topbar">
-      <button className="icon-btn mobile-menu" type="button" aria-label="فتح قائمة الإدارة" onClick={onMenu}>
+      <button className="icon-btn mobile-menu" type="button" aria-label={menuOpen ? "إغلاق قائمة الإدارة" : "فتح قائمة الإدارة"} aria-expanded={menuOpen} aria-controls="admin-mobile-drawer" onClick={onMenu}>
         <Menu size={20} />
       </button>
       <div>
@@ -625,8 +626,6 @@ function CentralDataBridge({
       const previousMembers = Array.isArray(previousForSave?.members)
         ? previousForSave.members
         : [];
-      const nextMemberIds = new Set(nextPayload.members.map((member) => member.id));
-      const deletedMembers = previousMembers.filter((member) => !nextMemberIds.has(member.id));
       const changedMembers = nextPayload.members.filter((member) => {
         const old = previousMembers.find((item) => item.id === member.id);
         return !old || JSON.stringify(old) !== JSON.stringify(member);
@@ -721,20 +720,6 @@ function CentralDataBridge({
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
           }
         }
-        if (deletedMembers.length) {
-          const remoteAfterDelete = await readAdminData<AppPayload>();
-          const stillPresent = deletedMembers.find((member) =>
-            normalizeMembers(remoteAfterDelete?.members).some((item) => item.id === member.id),
-          );
-          if (stillPresent)
-            throw firebaseSyncError("verify", "MEMBER_DELETE_NOT_CONFIRMED", `تعذر تأكيد حذف المشترك ${stillPresent.id} من Firebase RTDB`);
-          for (const member of deletedMembers) {
-            try {
-              const phone = memberPhoneE164(normalizeMember(member) as Member);
-              await releaseMemberPhone(phone, member.id);
-            } catch { /* no phone index to release */ }
-          }
-        }
         setRemotePresent(true);
         lastRemote.current = nextPayload;
         window.dispatchEvent(
@@ -785,11 +770,37 @@ function CentralDataBridge({
       });
     };
     const saveSettings = () => void save();
+    const deleteMember = (event: Event) => {
+      const detail = (event as CustomEvent<{ memberId: string; resolve: (ok: boolean) => void }>).detail;
+      void (async () => {
+        try {
+          if (busy) throw new Error("انتظر انتهاء عملية الحفظ الحالية ثم أعد المحاولة");
+          setBusy(true);
+          setError("");
+          window.dispatchEvent(new CustomEvent("alasas-save-status", { detail: "saving" }));
+          await deleteAdminMember(detail.memberId);
+          await revokeMemberAccess(detail.memberId);
+          const latest = await readAdminData<AppPayload>();
+          if (latest?.members?.some((member) => member.id === detail.memberId))
+            throw firebaseSyncError("verify", "DELETE_MISMATCH", "ما زال سجل المشترك موجوداً في Firebase");
+          lastRemote.current = latest || { ...payload, members: payload.members.filter((member) => member.id !== detail.memberId) };
+          window.dispatchEvent(new CustomEvent("alasas-save-status", { detail: "saved" }));
+          detail.resolve(true);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "تعذر حذف المشترك";
+          setError(message);
+          window.dispatchEvent(new CustomEvent("alasas-save-status", { detail: message }));
+          detail.resolve(false);
+        } finally { setBusy(false); }
+      })();
+    };
     window.addEventListener("alasas-save-settings", saveSettings);
     window.addEventListener("alasas-save-member", saveMember);
+    window.addEventListener("alasas-delete-member", deleteMember);
     return () => {
       window.removeEventListener("alasas-save-settings", saveSettings);
       window.removeEventListener("alasas-save-member", saveMember);
+      window.removeEventListener("alasas-delete-member", deleteMember);
     };
   }, [payload, busy, remoteSettings, role]);
   const migrate = async () => {
@@ -889,8 +900,8 @@ function App({
       ) : (
         <>
           {createPortal(
-            <div className={open ? "sidebar-wrap open" : "sidebar-wrap"} onClick={() => setOpen(false)}>
-              <div onClick={(e) => e.stopPropagation()}>
+            <div id="admin-mobile-drawer" className={open ? "sidebar-wrap open" : "sidebar-wrap"} onClick={() => setOpen(false)}>
+              <div className="sidebar-drawer" onClick={(e) => e.stopPropagation()}>
                 <Sidebar page={page} setPage={(next) => { setPage(next); setOpen(false); }} s={settings} role={role} onSignOut={onSignOut}/>
               </div>
               {open && <button type="button" className="sidebar-mobile-close" aria-label="إغلاق القائمة" onClick={() => setOpen(false)}><X size={21}/></button>}
@@ -898,7 +909,7 @@ function App({
             document.body
           )}
           <div className="main-area">
-            <Topbar title={title} onMenu={() => setOpen((current) => !current)} />
+            <Topbar title={title} menuOpen={open} onMenu={() => setOpen((current) => !current)} />
             <main className="content">
               <CentralDataBridge
                 role={role}
@@ -1893,155 +1904,74 @@ function requestMemberSave(payload: AppPayload) {
     window.dispatchEvent(new CustomEvent("alasas-save-member", { detail: { payload, resolve } }));
   });
 }
-function requestMemberDelete(payload: AppPayload) {
-  return requestMemberSave(payload);
+function requestMemberDelete(memberId: string) {
+  return new Promise<boolean>((resolve) => {
+    window.dispatchEvent(new CustomEvent("alasas-delete-member", { detail: { memberId, resolve } }));
+  });
 }
-function MembersWithPin({exercises,members,courses,setMembers,settings}:{exercises:Exercise[];members:Member[];courses:ReadyCourse[];setMembers:React.Dispatch<React.SetStateAction<Member[]>>;settings:SettingsData}){
-  const [editing,setEditing]=useState<Member|null>(null);
-  const [show,setShow]=useState(false);
-  const [pin,setPin]=useState('');
-  const [pinBusy,setPinBusy]=useState(false);
-  const [pinError,setPinError]=useState('');
-  const [deleteBusy,setDeleteBusy]=useState('');
-  const [deleteError,setDeleteError]=useState('');
-  const [issueTarget,setIssueTarget]=useState<Member|null>(null);
-  const [issuePhone,setIssuePhone]=useState('');
-  const save=async(m:Member)=>{
-    const nextMembers = members.some(a=>a.id===m.id)
-      ? members.map(a=>a.id===m.id?{...a,...m,photo:"",...(m.authUid||a.authUid?{authUid:m.authUid||a.authUid}:{}),...(m.phoneE164?{phoneE164:m.phoneE164,phoneDisplay:m.phoneDisplay}:{} )}:a)
-      : [{...m,photo:""},...members];
-    setMembers(nextMembers);
-    const ok = await requestMemberSave({schemaVersion:1, settings, exercises, members:nextMembers, courses});
-    if (ok) { setShow(false); setEditing(null); }
-  };
-  const openIssue=(m:Member)=>{setPin('');setPinError('');setIssueTarget(m);setIssuePhone(memberPhoneDisplay(m))};
-  const issue=async(m:Member,requestedPhone:string)=>{setPinBusy(true);setPinError('');setPin('');try{const phone=normalizeIraqiPhone(requestedPhone);const remote=await readAdminData<AppPayload>();const persisted=normalizeMembers(remote?.members).find(item=>item.id===m.id);if(!persisted)throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');setPin(await issueMemberPin(persisted.id,phone,persisted.membershipId||persisted.id,true));setIssueTarget(null);setIssuePhone('')}catch(e){setPinError(e instanceof Error?e.message:'تعذر إصدار PIN من الخدمة الموثوقة')}finally{setPinBusy(false)}};
-  const removeMember=async(m:Member)=>{if(deleteBusy)return;if(!window.confirm(`حذف المشترك ${m.name}؟ سيتم إبطال PIN والجلسات بعد تأكيد Firebase.`))return;setDeleteBusy(m.id);setDeleteError('');const nextMembers=members.filter(a=>a.id!==m.id);const ok=await requestMemberDelete({schemaVersion:1,settings,exercises,members:nextMembers,courses});if(ok){try{await revokeMemberAccess(m.id)}catch(error){console.warn('[member-delete] PIN revoke endpoint unavailable or failed',error)}setMembers(nextMembers)}else{setDeleteError('تعذر تأكيد حذف المشترك من Firebase؛ بقيت البيانات كما هي. حاول مرة أخرى.')}setDeleteBusy('')};
-  return <><section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={()=>{setEditing(null);setShow(true)}} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>{issueTarget&&<section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e=>setIssuePhone(e.target.value)}/></label><small>المعروض: {memberPhoneDisplay(issueTarget)||'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={()=>issue(issueTarget,issuePhone)}>{pinBusy?'جارٍ الإصدار…':'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={()=>{setIssueTarget(null);setIssuePhone('')}}>إلغاء</button></div></section>}{pin&&<section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={()=>navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={()=>window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}{pinError&&<p className="auth-error" role="alert">{pinError}</p>}{members.length?<div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m)||'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button onClick={()=>setEditing(m)}><ExternalLink size={14}/>عرض</button><button onClick={()=>{setEditing(m);setShow(true)}}><Pencil size={14}/>تعديل</button><button disabled={pinBusy} onClick={()=>openIssue(m)}><Check size={14}/>إصدار / إعادة إصدار PIN</button><button onClick={()=>printMember(m,settings)}><Printer size={14}/>طباعة</button><button disabled={Boolean(deleteBusy)} onClick={()=>void removeMember(m)}><Trash2 size={14}/>{deleteBusy===m.id?'جارٍ الحذف…':'حذف'}</button></div></td></tr>)}</tbody></table></div></div>:<Empty icon={<Users size={30}/>} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل."/>}{deleteError&&<p className="auth-error" role="alert">{deleteError}</p>}{(show||editing)&&<MemberWizard initial={editing} exercises={exercises} onClose={()=>{setShow(false);setEditing(null)}} onSave={save} viewOnly={!show}/>}</>}
-function Members({
-  exercises,
-  members,
-  setMembers,
-  settings,
-}: {
-  exercises: Exercise[];
-  members: Member[];
-  setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
-  settings: SettingsData;
-}) {
+function MembersWithPin({ exercises, members, courses, setMembers, settings }: { exercises: Exercise[]; members: Member[]; courses: ReadyCourse[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; settings: SettingsData }) {
   const [editing, setEditing] = useState<Member | null>(null);
   const [show, setShow] = useState(false);
-  const save = (m: Member) => {
-    setMembers((x) =>
-      x.some((a) => a.id === m.id)
-        ? x.map((a) => (a.id === m.id ? m : a))
-        : [...x, m],
-    );
-    setShow(false);
-    setEditing(null);
+  const [pin, setPin] = useState('');
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState('');
+  const [issueTarget, setIssueTarget] = useState<Member | null>(null);
+  const [issuePhone, setIssuePhone] = useState('');
+  const [deletingId, setDeletingId] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteSuccess, setDeleteSuccess] = useState('');
+  const [retryDeleteId, setRetryDeleteId] = useState('');
+  const save = async (m: Member) => {
+    const nextMembers = members.some(a => a.id === m.id)
+      ? members.map(a => a.id === m.id ? { ...a, ...m, photo: '', ...(m.authUid || a.authUid ? { authUid: m.authUid || a.authUid } : {}), ...(m.phoneE164 ? { phoneE164: m.phoneE164, phoneDisplay: m.phoneDisplay } : {}) } : a)
+      : [{ ...m, photo: '' }, ...members];
+    setMembers(nextMembers);
+    const ok = await requestMemberSave({ schemaVersion: 1, settings, exercises, members: nextMembers, courses });
+    if (ok) { setShow(false); setEditing(null); }
   };
-  return (
-    <>
-      <section className="section-heading">
-        <div>
-          <h2>المشتركون</h2>
-          <p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p>
-        </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setShow(true);
-          }}
-          icon={<Plus size={17} />}
-        >
-          إضافة مشترك
-        </Button>
-      </section>
-      {members.length ? (
-        <div className="panel table-panel">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>المشترك</th>
-                  <th>تاريخ الإنشاء</th>
-                  <th>الطول</th>
-                  <th>الوزن</th>
-                  <th>الأيام</th>
-                  <th>الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((m) => (
-                  <tr key={m.id}>
-                    <td>
-                      <div className="member-cell">
-                        <div className="avatar">{m.name.slice(0, 1)}</div>
-                        <b>{m.name}</b>
-                      </div>
-                    </td>
-                    <td>{m.createdAt}</td>
-                    <td>{m.height || "—"} سم</td>
-                    <td>{m.weight || "—"} كغم</td>
-                    <td>{m.days.length}</td>
-                    <td>
-                      <div className="row-actions">
-                        <button onClick={() => setEditing(m)}>
-                          <ExternalLink size={14} />
-                          عرض
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditing(m);
-                            setShow(true);
-                          }}
-                        >
-                          <Pencil size={14} />
-                          تعديل
-                        </button>
-                        <button onClick={() => printMember(m, settings)}>
-                          <Printer size={14} />
-                          طباعة
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm(`حذف المشترك ${m.name}؟`))
-                              setMembers((x) => x.filter((a) => a.id !== m.id));
-                          }}
-                        >
-                          <Trash2 size={14} />
-                          حذف
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <Empty
-          icon={<Users size={30} />}
-          title="ابدأ بإضافة مشترك"
-          text="Wizard منظم لبناء كورس مستقل."
-        />
-      )}
-      {(show || editing) && (
-        <MemberWizard
-          initial={editing}
-          exercises={exercises}
-          onClose={() => {
-            setShow(false);
-            setEditing(null);
-          }}
-          onSave={save}
-          viewOnly={!show}
-        />
-      )}
-    </>
-  );
+  const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); };
+  const issue = async (m: Member, requestedPhone: string) => {
+    setPinBusy(true); setPinError(''); setPin('');
+    try {
+      const phone = normalizeIraqiPhone(requestedPhone);
+      const remote = await readAdminData<AppPayload>();
+      const persisted = normalizeMembers(remote?.members).find(item => item.id === m.id);
+      if (!persisted) throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');
+      setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true));
+      setIssueTarget(null); setIssuePhone('');
+    } catch (e) { setPinError(e instanceof Error ? e.message : 'تعذر إصدار PIN من الخدمة الموثوقة'); }
+    finally { setPinBusy(false); }
+  };
+  const performDelete = async (memberId: string, memberName: string) => {
+    if (deletingId) return;
+    setDeletingId(memberId); setDeleteError(''); setDeleteSuccess('');
+    const ok = await requestMemberDelete(memberId);
+    if (ok) {
+      setMembers(current => current.filter(item => item.id !== memberId));
+      setDeleteSuccess(`تم حذف ${memberName} من Firebase وإبطال وصوله.`);
+      setRetryDeleteId('');
+    } else {
+      setDeleteError(`تعذر تأكيد حذف ${memberName}. قد يكون الوصول أُبطل جزئياً؛ أعد المحاولة لإكمال العملية.`);
+      setRetryDeleteId(memberId);
+    }
+    setDeletingId('');
+  };
+  const remove = (member: Member) => {
+    if (deletingId || !window.confirm(`حذف المشترك ${member.name}؟ سيتم إبطال PIN والجلسات أيضاً.`)) return;
+    void performDelete(member.id, member.name);
+  };
+  return <>
+    <section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={() => { setEditing(null); setShow(true); }} icon={<Plus size={17} />}>إضافة مشترك</Button></section>
+    {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
+    {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
+    {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone)}>{pinBusy ? 'جارٍ الإصدار…' : 'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
+    {pin && <section className="panel pin-reveal" role="status"><b>PIN الصادر — اعرضه للمشترك الآن فقط</b><strong>{pin}</strong><div><button className="secondary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة</button></div><small>لن يُعاد عرض هذا الرمز من Firebase أو المتصفح بعد إغلاق هذه الشاشة.</small></section>}
+    {pinError && <p className="auth-error" role="alert">{pinError}</p>}
+    {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إصدار / إعادة إصدار PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
+    {(show || editing) && <MemberWizard initial={editing} exercises={exercises} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
+  </>;
 }
+
 function MemberWizard({
   initial,
   exercises,
@@ -2782,7 +2712,7 @@ createRoot(document.getElementById("root")!).render(
     <UiErrorBoundary>
       {adminRoute ? (
         <AdminGate />
-      ) : exerciseRoute ? (
+      ) : location.hash.startsWith("#/exercise/") ? (
         <App role="MANAGER" onSignOut={() => {}} />
       ) : (
         <MemberPinGate />

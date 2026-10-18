@@ -1,6 +1,7 @@
 import { get, onValue, ref, runTransaction, update, type Unsubscribe } from "firebase/database";
 import { firebaseDatabase } from "./firebase";
 import { safeVideoUrl } from "./videoUrl";
+import { deletedMemberInPayload, filterDeletedMembers } from "./memberTombstones";
 
 export type FirebaseSyncPhase = "update" | "read" | "verify";
 
@@ -75,18 +76,80 @@ export function watchAdminData<T>(
   callback: (value: T | null) => void,
 ): Unsubscribe | (() => undefined) {
   if (!firebaseDatabase) return () => undefined;
-  return onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
-    callback(snapshot.exists() ? (snapshot.val() as T) : null);
+  let appData: T | null = null;
+  let deleted: Record<string, unknown> = {};
+  let appLoaded = false;
+  const publish = () => {
+    if (!appLoaded) return;
+    const value = appData as (T & { members?: unknown }) | null;
+    if (value && Array.isArray(value.members))
+      callback({ ...value, members: filterDeletedMembers(value.members, deleted) } as T);
+    else callback(appData);
+  };
+  const stopApp = onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
+    appData = snapshot.exists() ? snapshot.val() as T : null;
+    appLoaded = true;
+    publish();
   });
+  const stopDeleted = onValue(ref(firebaseDatabase, "deletedMemberIds"), (snapshot) => {
+    deleted = snapshot.exists() ? snapshot.val() as Record<string, unknown> : {};
+    publish();
+  });
+  return () => { stopApp(); stopDeleted(); };
 }
 
 export async function readAdminData<T>() {
   if (!firebaseDatabase) return null;
   try {
     const snapshot = await get(ref(firebaseDatabase, "appData"));
-    return snapshot.exists() ? (snapshot.val() as T) : null;
+    const value = snapshot.exists() ? snapshot.val() as T & { members?: unknown } : null;
+    if (!value) return null;
+    const deletedSnapshot = await get(ref(firebaseDatabase, "deletedMemberIds"));
+    const deleted = deletedSnapshot.exists() ? deletedSnapshot.val() as Record<string, unknown> : {};
+    if (Array.isArray(value.members)) value.members = filterDeletedMembers(value.members, deleted);
+    return value as T;
   } catch (error) {
     throw new FirebaseSyncError("read", firebaseErrorCode(error), "تعذر قراءة Firebase RTDB");
+  }
+}
+
+/** Delete a member only after the authoritative RTDB update is acknowledged and read back. */
+export async function deleteAdminMember(memberId: string) {
+  if (!firebaseDatabase) throw new FirebaseSyncError("update", "NOT_CONFIGURED", "Firebase RTDB غير مهيأ");
+  if (!memberId) throw new FirebaseSyncError("update", "MEMBER_REQUIRED", "معرّف المشترك مطلوب");
+  try {
+    const root = ref(firebaseDatabase);
+    const snapshot = await get(ref(firebaseDatabase, "appData"));
+    const appData = snapshot.val() as { members?: unknown } | null;
+    const members = Array.isArray(appData?.members) ? appData.members : [];
+    const member = members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as Record<string, unknown> | undefined;
+    const tombstoneSnapshot = await get(ref(firebaseDatabase, `deletedMemberIds/${memberId}`));
+    if (!member && !tombstoneSnapshot.exists()) throw new FirebaseSyncError("verify", "MEMBER_NOT_FOUND", "المشترك غير موجود في Firebase");
+    const remaining = members.filter((item) => !item || typeof item !== "object" || (item as { id?: unknown }).id !== memberId);
+    const updates: Record<string, unknown> = {
+      "appData/members": remaining,
+      [`deletedMemberIds/${memberId}`]: { deletedAt: new Date().toISOString() },
+    };
+    const uid = typeof member?.authUid === "string" ? member.authUid : "";
+    if (uid) updates[`membersByUid/${uid}`] = null;
+    await update(root, updates);
+
+    const phone = typeof member?.phoneE164 === "string" ? member.phoneE164 : typeof member?.phone === "string" ? member.phone : "";
+    if (phone) await runTransaction(ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`), (current) => current === memberId ? null : current);
+
+    const [membersCheck, profileCheck] = await Promise.all([
+      get(ref(firebaseDatabase, "appData/members")),
+      uid ? get(ref(firebaseDatabase, `membersByUid/${uid}`)) : Promise.resolve(null),
+    ]);
+    const persistedMembers = membersCheck.val();
+    const stillPresent = Array.isArray(persistedMembers)
+      ? persistedMembers.some((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId)
+      : Boolean(persistedMembers && typeof persistedMembers === "object" && Object.values(persistedMembers).some((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId));
+    if (stillPresent || profileCheck?.exists()) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
+    return { member: member || null, memberId };
+  } catch (error) {
+    if (error instanceof FirebaseSyncError) throw error;
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر حذف المشترك من Firebase RTDB");
   }
 }
 
@@ -170,6 +233,12 @@ export async function writeAdminData<T>(
     courses?: unknown;
     migratedAt?: unknown;
   };
+  if (Array.isArray(appData.members)) {
+    const tombstones = await get(ref(firebaseDatabase, "deletedMemberIds"));
+    const deleted = tombstones.exists() ? tombstones.val() as Record<string, unknown> : {};
+    const resurrection = deletedMemberInPayload(appData.members as unknown[], deleted);
+    if (resurrection) throw firebaseSyncError("update", "MEMBER_DELETED", "لا يمكن إعادة إنشاء عضوية محذوفة؛ أنشئ عضوية جديدة بمعرّف مختلف");
+  }
   const previous = (options.previous && typeof options.previous === "object"
     ? options.previous
     : null) as {
@@ -299,20 +368,11 @@ export async function writeAdminData<T>(
       .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
       .map((member) => [member.authUid as string, profile(member)]),
   );
-  const nextAuthUids = new Set(
-    nextMembers
-      .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
-      .map((member) => member.authUid as string),
-  );
   for (const member of nextMembers) {
     if (typeof member.authUid !== "string" || member.authUid.length < 20) continue;
     const next = profile(member);
     if (!same(next, oldProfiles.get(member.authUid)))
       updates[`membersByUid/${member.authUid}`] = next;
-  }
-  // Deleting from appData must also remove the private UID projection.
-  for (const [uid] of oldProfiles) {
-    if (!nextAuthUids.has(uid)) updates[`membersByUid/${uid}`] = null;
   }
 
   try {

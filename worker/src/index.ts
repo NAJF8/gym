@@ -127,6 +127,8 @@ async function verifyAdmin(env: Env, request: Request) {
 
 async function readMember(env: Env, memberId: string) {
   const token = await serviceAccessToken(env);
+  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(memberId)}`, token);
+  if (tombstone) throw new Error("MEMBER_DELETED");
   const appData = await firebaseGet(env, "appData", token) as { members?: Array<Record<string, unknown>>; courses?: Array<Record<string, unknown>>; exercises?: Array<Record<string, unknown>> } | null;
   const member = appData?.members?.find(item => item.id === memberId);
   if (!member) throw new Error("MEMBER_NOT_FOUND");
@@ -224,16 +226,6 @@ async function issuePin(env: Env, request: Request) {
   return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
-async function revokeMemberAccess(env: Env, request: Request) {
-  await verifyAdmin(env, request);
-  const body = await request.json() as { memberId?: unknown };
-  if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
-  const now = Date.now();
-  const disabled = await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', updated_at = ?, locked_until = ? WHERE member_id = ?").bind(new Date(now).toISOString(), now + 365 * 24 * 60 * 60_000, body.memberId).run();
-  await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
-  return json({ ok: true, memberId: body.memberId, disabled: Number(disabled.meta?.changes || 0) }, 200, cors(env, request.headers.get("origin") || ""));
-}
-
 async function memberLogin(env: Env, request: Request) {
   const body = await request.json() as { phone?: unknown; pin?: unknown };
   if (!isPin(body.pin)) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
@@ -277,6 +269,20 @@ async function memberLogout(env: Env, request: Request) {
   return json({ ok: true }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
+async function revokeMember(env: Env, request: Request) {
+  await verifyAdmin(env, request);
+  const body = await request.json() as { memberId?: unknown };
+  if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
+  // Permit retry after RTDB deletion: the tombstone proves this ID belonged to a deleted member.
+  const token = await serviceAccessToken(env);
+  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(body.memberId)}`, token);
+  if (!tombstone) await readMember(env, body.memberId);
+  const now = Date.now();
+  await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', credential_version = credential_version + 1, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), body.memberId).run();
+  await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
+  return json({ ok: true, access: "revoked" }, 200, cors(env, request.headers.get("origin") || ""));
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const origin = request.headers.get("origin") || "";
@@ -287,7 +293,7 @@ export default {
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
-      if (url.pathname === "/v1/admin/member-revoke") return await revokeMemberAccess(env, request);
+      if (url.pathname === "/v1/admin/member-revoke") return await revokeMember(env, request);
       if (url.pathname === "/v1/member/login") return await memberLogin(env, request);
       if (url.pathname === "/v1/member/me") return await memberMe(env, request);
       if (url.pathname === "/v1/member/logout") return await memberLogout(env, request);
@@ -296,7 +302,7 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
       const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);
