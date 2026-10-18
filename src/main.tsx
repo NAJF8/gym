@@ -859,6 +859,14 @@ function CentralDataBridge({
       });
     };
     const saveSettings = () => void save();
+    const saveExercises = (event: Event) => {
+      const exercises = (event as CustomEvent<{ exercises?: Exercise[] }>).detail?.exercises;
+      if (!Array.isArray(exercises)) return;
+      // Managers may curate exercises but cannot write settings. Send exactly
+      // the user-approved merged library; writeAdminData performs targeted
+      // idempotent RTDB/publicExercises updates and verifies the readback.
+      void save({ ...payload, exercises });
+    };
     const deleteMember = (event: Event) => {
       const detail = (event as CustomEvent<{ memberId: string; resolve: (ok: boolean) => void }>).detail;
       void (async () => {
@@ -884,10 +892,12 @@ function CentralDataBridge({
       })();
     };
     window.addEventListener("alasas-save-settings", saveSettings);
+    window.addEventListener("alasas-save-exercises", saveExercises);
     window.addEventListener("alasas-save-member", saveMember);
     window.addEventListener("alasas-delete-member", deleteMember);
     return () => {
       window.removeEventListener("alasas-save-settings", saveSettings);
+      window.removeEventListener("alasas-save-exercises", saveExercises);
       window.removeEventListener("alasas-save-member", saveMember);
       window.removeEventListener("alasas-delete-member", deleteMember);
     };
@@ -1175,11 +1185,23 @@ function Categories({
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
   const [importMessage, setImportMessage] = useState("");
+  useEffect(() => {
+    const report = (event: Event) => {
+      const detail = String((event as CustomEvent<string>).detail);
+      if (detail === "saved") setImportMessage("تم حفظ المكتبة العربية وتأكيد قراءتها من Firebase RTDB.");
+      else if (detail !== "saving" && detail) setImportMessage(detail);
+    };
+    window.addEventListener("alasas-save-status", report);
+    return () => window.removeEventListener("alasas-save-status", report);
+  }, []);
   const list = exercises.filter((e) => e.muscle === muscle);
   const importSuggestions = () => {
     setExercises((current) => {
       const result = mergeExerciseLibrary(current, suggestedExercises);
-      setImportMessage(result.added ? `تمت إضافة ${result.added} تمريناً عربياً جديداً؛ ستُزامن مع Firebase دون تغيير تمارينك أو كورساتك الحالية.` : "المكتبة العربية موجودة بالفعل؛ لم تُكرر أي تمرين.");
+      if (result.added) {
+        setImportMessage(`جارٍ حفظ ${result.added} تمريناً عربياً جديداً في Firebase دون تغيير الكورسات الحالية…`);
+        window.dispatchEvent(new CustomEvent("alasas-save-exercises", { detail: { exercises: result.exercises } }));
+      } else setImportMessage("المكتبة العربية موجودة بالفعل؛ لم تُكرر أي تمرين.");
       return result.exercises;
     });
   };
