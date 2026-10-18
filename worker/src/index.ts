@@ -244,14 +244,13 @@ async function memberLogin(env: Env, request: Request) {
   const actual = await derivePin(body.pin, salt);
   const matches = Boolean(row && row.status === "ACTIVE" && (row.locked_until ?? 0) <= now && constantTimeEqual(actual, storedBytes(row.pin_hash)));
   if (limited || !row || !matches) {
-    if (!row) {
-      await recordRateFailure(env, [`source:${requestSource(request)}`], now);
-      return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
-    }
-    if (limited || row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
     // Increment and lock in one conditional SQL statement. A read followed by
     // a stale read-modify-write lets concurrent guesses overwrite each other.
-    await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row.member_id, now).run();
+    // Run the same conditional statement for unknown phones using an
+    // impossible synthetic member id. This keeps D1 work and rate-limit
+    // accounting equivalent across unknown, wrong, inactive, and locked
+    // credentials without changing the generic public response.
+    await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row?.member_id || `unknown:${phone}`, now).run();
     await recordRateFailure(env, keys, now);
     return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   }
