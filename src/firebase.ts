@@ -23,6 +23,8 @@ export const authPersistenceReady = firebaseAuth
 export const firebaseDatabase = firebaseApp ? getDatabase(firebaseApp) : null
 export const firebaseFunctions = firebaseApp ? getFunctions(firebaseApp) : null
 export const googleProvider = new GoogleAuthProvider()
+export const adminGoogleProvider = new GoogleAuthProvider()
+adminGoogleProvider.setCustomParameters({ prompt: 'select_account' })
 
 const useEmulators = import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
 const emulatorHost = import.meta.env.VITE_FIREBASE_EMULATOR_HOST || '127.0.0.1'

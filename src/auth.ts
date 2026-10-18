@@ -1,6 +1,6 @@
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut, type User } from 'firebase/auth'
 import { get, onValue, ref } from 'firebase/database'
-import { authPersistenceReady, firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
+import { adminGoogleProvider, authPersistenceReady, firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
 
 export type AdminRole = 'SUPER_ADMIN' | 'MANAGER'
 export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string }
@@ -26,10 +26,10 @@ export async function signInAdmin() {
   if (!firebaseAuth) throw new Error('Firebase غير مهيأ. أضف متغيرات VITE_FIREBASE_* قبل تسجيل الدخول.')
   await authPersistenceReady
   try {
-    return await signInWithPopup(firebaseAuth, googleProvider)
+    return await signInWithPopup(firebaseAuth, adminGoogleProvider)
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-blocked') {
-      return signInWithRedirect(firebaseAuth, googleProvider)
+      return signInWithRedirect(firebaseAuth, adminGoogleProvider)
     }
     throw error
   }
