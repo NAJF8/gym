@@ -125,14 +125,23 @@ export async function deleteAdminMember(memberId: string) {
     const member = members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as Record<string, unknown> | undefined;
     const tombstoneSnapshot = await get(ref(firebaseDatabase, `deletedMemberIds/${memberId}`));
     if (!member && !tombstoneSnapshot.exists()) throw new FirebaseSyncError("verify", "MEMBER_NOT_FOUND", "المشترك غير موجود في Firebase");
-    const remaining = members.filter((item) => !item || typeof item !== "object" || (item as { id?: unknown }).id !== memberId);
+    const deletedAt = new Date().toISOString();
     const updates: Record<string, unknown> = {
-      "appData/members": remaining,
-      [`deletedMemberIds/${memberId}`]: { deletedAt: new Date().toISOString() },
+      [`deletedMemberIds/${memberId}`]: { deletedAt },
     };
     const uid = typeof member?.authUid === "string" ? member.authUid : "";
     if (uid) updates[`membersByUid/${uid}`] = null;
     await update(root, updates);
+
+    // Serialize removal against concurrent admin writes. A plain multi-location
+    // update based on the earlier snapshot can resurrect a member when two
+    // deletes overlap; the tombstone must already exist before this transaction
+    // so stale admin payloads fail closed in writeAdminData.
+    const removal = await runTransaction(ref(firebaseDatabase, "appData/members"), (current) => {
+      if (!Array.isArray(current)) return current;
+      return current.filter((item) => !item || typeof item !== "object" || (item as { id?: unknown }).id !== memberId);
+    });
+    if (!removal.committed) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
 
     const phone = typeof member?.phoneE164 === "string" ? member.phoneE164 : typeof member?.phone === "string" ? member.phone : "";
     if (phone) await runTransaction(ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`), (current) => current === memberId ? null : current);
