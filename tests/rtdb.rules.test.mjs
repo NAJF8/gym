@@ -202,3 +202,42 @@ test('manager can write the same parent array path used by the admin sync bridge
   }))
 })
 
+test('tombstoned member child writes are rejected while unrelated member writes remain allowed', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(set(ref(manager, 'appData/members'), [
+    { id: 'race-target', name: 'Race target' },
+    { id: 'race-other', name: 'Race other' },
+  ]))
+  await assertSucceeds(set(ref(manager, 'deletedMemberIds/race-target'), { deletedAt: '2026-10-18T00:00:00.000Z' }))
+  await assertFails(set(ref(manager, 'appData/members/0'), { id: 'race-target', name: 'stale target' }))
+  await assertSucceeds(set(ref(manager, 'appData/members/1'), { id: 'race-other', name: 'updated other' }))
+})
+
+test('concurrent member deletions preserve unrelated members and a concurrent create', async () => {
+  const first = verifiedContext('manager').database()
+  const second = verifiedContext('super').database()
+  await assertSucceeds(set(ref(first, 'appData/members'), [
+    { id: 'race-a', name: 'A' },
+    { id: 'race-b', name: 'B' },
+    { id: 'race-c', name: 'C' },
+  ]))
+  await Promise.all([
+    assertSucceeds(set(ref(first, 'deletedMemberIds/race-a'), { deletedAt: '2026-10-18T00:00:01.000Z' })),
+    assertSucceeds(set(ref(second, 'deletedMemberIds/race-b'), { deletedAt: '2026-10-18T00:00:02.000Z' })),
+    assertSucceeds(set(ref(first, 'appData/members/3'), { id: 'race-new', name: 'new' })),
+  ])
+  const before0 = await assertSucceeds(get(ref(first, 'appData/members/0')))
+  const before1 = await assertSucceeds(get(ref(second, 'appData/members/1')))
+  assert.equal(before0.val().id, 'race-a')
+  assert.equal(before1.val().id, 'race-b')
+  const removals = await Promise.all([
+    assertSucceeds(runTransaction(ref(first, 'appData/members/0'), current => current == null || current?.id === 'race-a' ? null : undefined)),
+    assertSucceeds(runTransaction(ref(second, 'appData/members/1'), current => current == null || current?.id === 'race-b' ? null : undefined)),
+  ])
+  assert.equal(removals[0].committed, true)
+  assert.equal(removals[1].committed, true)
+  const final = await assertSucceeds(get(ref(first, 'appData/members')))
+  const ids = (final.val() || []).filter(Boolean).map(item => item.id).sort()
+  assert.deepEqual(ids, ['race-c', 'race-new'])
+})
+

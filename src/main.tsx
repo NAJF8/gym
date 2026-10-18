@@ -43,6 +43,7 @@ import {
   readMemberProfile,
   readAdminData,
   readAdminMember,
+  readAdminDeletionConflicts,
   readAdminExercises,
   type SyncPayload,
   watchAdminData,
@@ -1931,6 +1932,12 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
   const [deleteError, setDeleteError] = useState('');
   const [deleteSuccess, setDeleteSuccess] = useState('');
   const [retryDeleteId, setRetryDeleteId] = useState('');
+  const [deletionConflicts, setDeletionConflicts] = useState<Array<{ id: string; member: Record<string, unknown>; deletedAt: string }>>([]);
+  useEffect(() => {
+    let active = true;
+    void readAdminDeletionConflicts().then((conflicts) => { if (active) setDeletionConflicts(conflicts); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [members]);
   const save = async (m: Member) => {
     const nextMembers = members.some(a => a.id === m.id)
       ? members.map(a => a.id === m.id ? { ...a, ...m, photo: '', ...(m.authUid || a.authUid ? { authUid: m.authUid || a.authUid } : {}), ...(m.phoneE164 ? { phoneE164: m.phoneE164, phoneDisplay: m.phoneDisplay } : {}) } : a)
@@ -1958,6 +1965,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     const ok = await requestMemberDelete(memberId);
     if (ok) {
       setMembers(current => current.filter(item => item.id !== memberId));
+      setDeletionConflicts(current => current.filter(item => item.id !== memberId));
       setDeleteSuccess(`تم حذف ${memberName} من Firebase وإبطال وصوله.`);
       setRetryDeleteId('');
     } else {
@@ -1972,6 +1980,7 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
   };
   return <>
     <section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={() => { setEditing(null); setShow(true); }} icon={<Plus size={17} />}>إضافة مشترك</Button></section>
+    {deletionConflicts.length > 0 && <section className="panel" role="region" aria-label="سجلات حذف غير مكتملة"><h3>سجلات تحتاج إكمال الحذف</h3><p>هذه السجلات تحمل Tombstone لكنها بقيت في RTDB بعد انقطاع أو سباق سابق. لا يمكن إصدار PIN لها.</p>{deletionConflicts.map(conflict => <div key={conflict.id} className="save-status"><b>{String(conflict.member.name || 'عضوية')}</b><span dir="ltr"> {conflict.id}</span><button className="text-btn" disabled={Boolean(deletingId)} onClick={() => remove({ id: conflict.id, name: String(conflict.member.name || 'العضوية') } as Member)}>إكمال الحذف</button></div>)}</section>}
     {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
     {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
     {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone)}>{pinBusy ? 'جارٍ الإصدار…' : 'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
