@@ -547,6 +547,17 @@ function Topbar({ title, onMenu, menuOpen }: { title: string; onMenu: () => void
   );
 }
 type AppPayload = SyncPayload<SettingsData, Exercise, Member, ReadyCourse>;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
 function CentralDataBridge({
   role,
   settings,
@@ -701,8 +712,7 @@ function CentralDataBridge({
             );
           const mismatched = changedExercises.find(
             (exercise) =>
-              JSON.stringify(remoteById.get(exercise.id)) !==
-              JSON.stringify(exercise),
+            stableJson(remoteById.get(exercise.id)) !== stableJson(exercise),
           );
           if (mismatched)
             throw firebaseSyncError(
@@ -716,7 +726,7 @@ function CentralDataBridge({
             const persisted = await readAdminMember<Member>(member.id);
             if (!persisted)
               throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
-            if (JSON.stringify(persisted) !== JSON.stringify(member))
+            if (stableJson(persisted) !== stableJson(member))
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
           }
         }
