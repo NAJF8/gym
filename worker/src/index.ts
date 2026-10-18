@@ -1,4 +1,5 @@
 import { base64ToBytes, constantTimeEqual, derivePin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto";
+import { applyInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail } from "./invitations";
 
 interface Env {
   PIN_DB: D1Database;
@@ -143,28 +144,40 @@ async function verifiedGoogleUser(env: Env, request: Request) {
   return { ...user, idToken };
 }
 
-async function emailKey(email: string) { return encodeBase64Url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase()))); }
-
 async function adminManagement(env: Env, request: Request, action: string) {
   if (action === 'accept') {
-    const user = await verifiedGoogleUser(env, request); const token = await serviceAccessToken(env); const email = user.email!.trim().toLowerCase(); const key = await emailKey(email);
-    const invite = await firebaseGet(env, `pendingAdminInvites/${key}`, token) as { email?: string; role?: string; status?: string } | null;
-    if (!invite || invite.status !== 'PENDING' || invite.email !== email) throw new Error('INVITATION_NOT_FOUND');
-    const now = new Date().toISOString();
-    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, createdAt: now, lastLoginAt: now }, token);
-    await firebaseWrite(env, `pendingAdminInvites/${key}`, { ...invite, status: 'ACCEPTED', acceptedUid: user.localId, acceptedAt: now }, token);
-    await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: 'INVITE_ACCEPTED', email, role: invite.role, acceptedUid: user.localId, createdAt: now }, token);
+    const user = await verifiedGoogleUser(env, request);
+    const now = Date.now();
+    const email = normalizeInvitationEmail(user.email);
+    const invite = await claimLatestInvitation(env.PIN_DB, email, user.localId!, now);
+    if (!invite) throw new Error('INVITATION_NOT_FOUND');
+    if (invite.expires_at <= now) {
+      await expireInvitation(env.PIN_DB, invite, now);
+      throw new Error('INVITATION_EXPIRED');
+    }
+    const token = await serviceAccessToken(env);
+    const current = await firebaseGet(env, `admins/${encodeURIComponent(user.localId!)}`, token) as { email?: string; role?: string; active?: boolean } | null;
+    if (current) {
+      if (current.email === email && current.role === invite.role && current.active === true) {
+        await applyInvitation(env.PIN_DB, invite, user.localId!, now);
+        return json({ role: invite.role, linked: true, idempotent: true }, 200, cors(env, request.headers.get('origin') || ''));
+      }
+      await expireInvitation(env.PIN_DB, invite, now);
+      throw new Error('EXISTING_ADMIN_PROTECTED');
+    }
+    await firebaseWrite(env, `admins/${encodeURIComponent(user.localId!)}`, { email, displayName: user.displayName || '', role: invite.role, active: true, createdAt: new Date(now).toISOString(), lastLoginAt: new Date(now).toISOString() }, token);
+    if (!await applyInvitation(env.PIN_DB, invite, user.localId!, now)) throw new Error('INVITATION_APPLY_RETRYABLE');
     return json({ role: invite.role, linked: true }, 200, cors(env, request.headers.get('origin') || ''));
   }
   const actorUid = await verifyAdmin(env, request);
-  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string } | null;
+  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string; email?: string } | null;
   if (actor?.role !== 'SUPER_ADMIN') throw new Error('SUPER_ADMIN_REQUIRED');
   const token = await serviceAccessToken(env);
   if (action === 'list') {
     const admins = await firebaseGet(env, 'admins', token) as Record<string, Record<string, unknown>> | null;
-    const invites = await firebaseGet(env, 'pendingAdminInvites', token) as Record<string, Record<string, unknown>> | null;
-    const rows = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt })).filter(row => row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
-    for (const invite of Object.values(invites || {})) if (invite.status === 'PENDING') rows.push({ email: String(invite.email || ''), displayName: '', role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
+    const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt })).filter(row => row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
+    const invites = await env.PIN_DB.prepare("SELECT email, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
+    for (const invite of invites.results || []) rows.push({ email: String(invite.email || ''), displayName: '', role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
     return json({ admins: rows }, 200, cors(env, request.headers.get('origin') || ''));
   }
   if (action === 'invite') {
@@ -172,10 +185,12 @@ async function adminManagement(env: Env, request: Request, action: string) {
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const role = body.role === 'MANAGER' || body.role === 'SUPER_ADMIN' ? body.role : '';
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !role) throw new Error('INVITATION_INVALID');
-    const key = await emailKey(email); const now = new Date().toISOString();
-    await firebaseWrite(env, `pendingAdminInvites/${key}`, { email, role, status: 'PENDING', createdAt: now, createdBy: actorUid }, token);
-    await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: 'INVITE_CREATED', email, role, actorUid, createdAt: now }, token);
-    return json({ invitationId: key }, 200, cors(env, request.headers.get('origin') || ''));
+    if (email === normalizeInvitationEmail(actor?.email)) throw new Error('SELF_INVITE_FORBIDDEN');
+    const existingAdmins = await firebaseGet(env, 'admins', token) as Record<string, { email?: string }> | null;
+    if (Object.values(existingAdmins || {}).some(item => normalizeInvitationEmail(item.email) === email)) throw new Error('EXISTING_ADMIN_PROTECTED');
+    const invitationId = crypto.randomUUID(); const now = Date.now();
+    await createInvitation(env.PIN_DB, { invitationId, email, role, actorUid, now, expiresAt: now + 7 * 24 * 60 * 60 * 1000 });
+    return json({ invitationId }, 200, cors(env, request.headers.get('origin') || ''));
   }
   const body = await request.json() as { uid?: unknown; action?: unknown; role?: unknown; active?: unknown };
   if (typeof body.uid !== 'string' || !['role', 'active', 'remove'].includes(String(body.action))) throw new Error('ADMIN_UPDATE_INVALID');
@@ -188,16 +203,18 @@ async function adminManagement(env: Env, request: Request, action: string) {
   }
   const value = body.action === 'remove' ? null : { ...target, ...(body.action === 'role' && (body.role === 'MANAGER' || body.role === 'SUPER_ADMIN') ? { role: body.role } : {}), ...(body.action === 'active' && typeof body.active === 'boolean' ? { active: body.active } : {}) };
   await firebaseWrite(env, `admins/${encodeURIComponent(body.uid)}`, value, token);
-  await firebaseWrite(env, `auditLogs/admin/${crypto.randomUUID()}`, { action: `ADMIN_${String(body.action).toUpperCase()}`, targetUid: body.uid, actorUid, createdAt: new Date().toISOString() }, token);
+  await env.PIN_DB.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, ?)").bind(crypto.randomUUID(), `ADMIN_${String(body.action).toUpperCase()}`, actorUid, body.uid, target.email || null, typeof value?.role === 'string' ? value.role : target.role || null, Date.now()).run();
   return json({ ok: true }, 200, cors(env, request.headers.get('origin') || ''));
 }
 
 async function readMember(env: Env, memberId: string) {
   const token = await serviceAccessToken(env);
-  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(memberId)}`, token);
+  const tombstone = await firebaseGet(env, `appData/deletedMemberIds/${encodeURIComponent(memberId)}`, token);
   if (tombstone) throw new Error("MEMBER_DELETED");
-  const appData = await firebaseGet(env, "appData", token) as { members?: unknown; courses?: unknown; exercises?: unknown } | null;
-  const members = Array.isArray(appData?.members)
+  const appData = await firebaseGet(env, "appData", token) as { membersById?: unknown; members?: unknown; courses?: unknown; exercises?: unknown } | null;
+  const members = appData?.membersById && typeof appData.membersById === "object"
+    ? Object.values(appData.membersById as Record<string, Record<string, unknown>>)
+    : Array.isArray(appData?.members)
     ? appData.members
     : appData?.members && typeof appData.members === "object"
       ? Object.values(appData.members as Record<string, Record<string, unknown>>)
@@ -349,7 +366,7 @@ async function revokeMember(env: Env, request: Request) {
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   // Permit retry after RTDB deletion: the tombstone proves this ID belonged to a deleted member.
   const token = await serviceAccessToken(env);
-  const tombstone = await firebaseGet(env, `deletedMemberIds/${encodeURIComponent(body.memberId)}`, token);
+  const tombstone = await firebaseGet(env, `appData/deletedMemberIds/${encodeURIComponent(body.memberId)}`, token);
   if (!tombstone) await readMember(env, body.memberId);
   const now = Date.now();
   await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', credential_version = credential_version + 1, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), body.memberId).run();
@@ -377,7 +394,7 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
       const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);
