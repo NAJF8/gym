@@ -239,25 +239,24 @@ async function memberLogin(env: Env, request: Request) {
   const row = await env.PIN_DB.prepare("SELECT * FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; pin_salt: unknown; pin_hash: unknown; failure_count: number; locked_until: number | null; status: string }>();
   const now = Date.now();
   const keys = [`account:${row?.member_id || `phone:${phone}`}`, `source:${requestSource(request)}`];
-  if (await rateLimited(env, keys, now)) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
-  if (!row) {
-    await recordRateFailure(env, [`source:${requestSource(request)}`], now);
-    return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
-  }
-  if (row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
-  const actual = await derivePin(body.pin, storedBytes(row.pin_salt));
-  if (!constantTimeEqual(actual, storedBytes(row.pin_hash))) {
+  const limited = await rateLimited(env, keys, now);
+  const salt = row ? storedBytes(row.pin_salt) : crypto.getRandomValues(new Uint8Array(16));
+  const actual = await derivePin(body.pin, salt);
+  const matches = Boolean(row && row.status === "ACTIVE" && (row.locked_until ?? 0) <= now && constantTimeEqual(actual, storedBytes(row.pin_hash)));
+  if (limited || !row || !matches) {
+    if (!row) {
+      await recordRateFailure(env, [`source:${requestSource(request)}`], now);
+      return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
+    }
+    if (limited || row.status !== "ACTIVE" || (row.locked_until ?? 0) > now) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
     // Increment and lock in one conditional SQL statement. A read followed by
     // a stale read-modify-write lets concurrent guesses overwrite each other.
-    const update = await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row.member_id, now).run();
-    const current = await env.PIN_DB.prepare("SELECT failure_count, locked_until FROM member_credentials WHERE member_id = ?").bind(row.member_id).first<{ failure_count: number; locked_until: number | null }>();
-    const changes = Number(update.meta?.changes || 0);
-    const locked = (current?.locked_until ?? 0) > now || (current?.failure_count ?? 0) >= 5;
+    await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = failure_count + 1, locked_until = CASE WHEN failure_count + 1 >= 5 THEN ? ELSE locked_until END, updated_at = ? WHERE member_id = ? AND status = 'ACTIVE' AND (locked_until IS NULL OR locked_until <= ?)").bind(now + 15 * 60_000, new Date(now).toISOString(), row.member_id, now).run();
     await recordRateFailure(env, keys, now);
-    return json({ error: "بيانات الدخول غير صحيحة" }, changes === 0 || locked ? 429 : 401, cors(env, request.headers.get("origin") || ""));
+    return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   }
   const { member, appData } = await readMember(env, row.member_id);
-  if (member.active === false) return json({ error: "العضوية غير فعالة" }, 403, cors(env, request.headers.get("origin") || ""));
+  if (member.active === false) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), new Date(now).toISOString(), row.member_id).run();
   await clearAccountRateFailure(env, row.member_id, now);
   return json({ member: publicMember(member, appData), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env, request.headers.get("origin") || ""));
