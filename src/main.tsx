@@ -263,6 +263,34 @@ const seedExercises: Exercise[] = [
     rest: "45 ثانية",
   },
 ];
+
+/** Optional library suggestions; imported explicitly, never written during initial hydration. */
+const suggestedExercises: Exercise[] = [
+  { id: "library-db-fly", name: "تفتيح دمبل مستوي", english: "Dumbbell Fly", muscle: muscles[0], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-chest-machine", name: "جهاز صدر", english: "Chest Press Machine", muscle: muscles[0], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-push-up", name: "ضغط صدر", english: "Push-Up", muscle: muscles[0], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-single-arm-row", name: "تجديف دمبل", english: "One Arm Dumbbell Row", muscle: muscles[1], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-tbar-row", name: "تي بار", english: "T-Bar Row", muscle: muscles[1], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-straight-pulldown", name: "سحب مستقيم", english: "Straight Arm Pulldown", muscle: muscles[1], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-leg-press", name: "ليج برس", english: "Leg Press", muscle: muscles[2], sets: 4, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-leg-extension", name: "تمديد الأرجل", english: "Leg Extension", muscle: muscles[2], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-leg-curl", name: "ثني الأرجل", english: "Leg Curl", muscle: muscles[2], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-rdl", name: "رومانيان ديدلفت", english: "Romanian Deadlift", muscle: muscles[2], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-db-shoulder-press", name: "ضغط كتف دمبل", english: "Dumbbell Shoulder Press", muscle: muscles[3], sets: 3, reps: "8–12", rest: "60 ثانية" },
+  { id: "library-lateral-raise", name: "رفرفة جانبية", english: "Lateral Raise", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-rear-delt-fly", name: "رفرفة خلفية", english: "Rear Delt Fly", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-face-pull", name: "فيس بول", english: "Face Pull", muscle: muscles[3], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-barbell-curl", name: "بايسبس بار", english: "Barbell Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-hammer-curl", name: "هامر", english: "Hammer Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-preacher-curl", name: "بريتشر", english: "Preacher Curl", muscle: muscles[4], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-overhead-triceps", name: "تمديد فوق الرأس", english: "Overhead Triceps Extension", muscle: muscles[5], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-skull-crusher", name: "سكَل كراشر", english: "Skull Crusher", muscle: muscles[5], sets: 3, reps: "10–12", rest: "60 ثانية" },
+  { id: "library-crunch", name: "كرنش", english: "Crunch", muscle: muscles[6], sets: 3, reps: "15–20", rest: "60 ثانية" },
+  { id: "library-leg-raise", name: "رفع الأرجل", english: "Leg Raise", muscle: muscles[6], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-wrist-curl", name: "ثني المعصم", english: "Wrist Curl", muscle: muscles[7], sets: 3, reps: "12–15", rest: "60 ثانية" },
+  { id: "library-standing-calf", name: "واقف سمانة", english: "Standing Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+  { id: "library-seated-calf", name: "جالس سمانة", english: "Seated Calf Raise", muscle: muscles[8], sets: 4, reps: "12–20", rest: "60 ثانية" },
+];
 const defaults: SettingsData = {
   coachName: "محمد عبدالرزاق",
   gymName: "AL ASAS FIT",
@@ -1103,6 +1131,14 @@ function Categories({
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
   const list = exercises.filter((e) => e.muscle === muscle);
+  const importSuggestions = () => {
+    setExercises((current) => {
+      const existing = new Set(current.map((e) => e.id));
+      const existingNames = new Set(current.map((e) => `${normalizeMuscle(e.muscle)}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
+      const additions = suggestedExercises.filter((e) => !existing.has(e.id) && !existingNames.has(`${e.muscle}:${(e.english || e.name).toLocaleLowerCase().trim()}`));
+      return additions.length ? [...current, ...additions] : current;
+    });
+  };
   const save = (e: Exercise) => {
     setExercises((x) =>
       x.some((a) => a.id === e.id)
@@ -1118,7 +1154,7 @@ function Categories({
           <h2>مكتبة التمارين</h2>
           <p>المصدر الموحد للتمارين المستخدمة في الكورسات والباركودات.</p>
         </div>
-        <Button
+        <div className="exercise-library-actions"><Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة التمارين الافتراضية</Button><Button
           onClick={() => {
             setEditing(null);
             setShow(true);
@@ -1126,7 +1162,7 @@ function Categories({
           icon={<Plus size={17} />}
         >
           إضافة تمرين
-        </Button>
+        </Button></div>
       </section>
       <div className="library-layout">
         <aside className="muscle-list">
@@ -2685,7 +2721,7 @@ function Modal({
             <X size={18} />
           </button>
         </div>
-        {children}
+        <div className="modal-scroll-content" tabIndex={0}>{children}</div>
       </section>
     </div>
   );
