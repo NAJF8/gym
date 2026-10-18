@@ -366,7 +366,11 @@ function normalizeSettings(value: unknown): SettingsData {
   };
 }
 function normalizeMembers(value: unknown): Member[] {
-  const items = Array.isArray(value) ? value : [];
+  const items = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? Object.values(value as Record<string, unknown>)
+      : [];
   return dedupeById(items.map(normalizeMember).filter((member): member is Member => Boolean(member)));
 }
 
