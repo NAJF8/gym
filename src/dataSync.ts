@@ -133,15 +133,21 @@ export async function deleteAdminMember(memberId: string) {
     if (uid) updates[`membersByUid/${uid}`] = null;
     await update(root, updates);
 
-    // Serialize removal against concurrent admin writes. A plain multi-location
-    // update based on the earlier snapshot can resurrect a member when two
-    // deletes overlap; the tombstone must already exist before this transaction
-    // so stale admin payloads fail closed in writeAdminData.
-    const removal = await runTransaction(ref(firebaseDatabase, "appData/members"), (current) => {
-      if (!Array.isArray(current)) return current;
-      return current.filter((item) => !item || typeof item !== "object" || (item as { id?: unknown }).id !== memberId);
-    });
-    if (!removal.committed) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
+    // Serialize removal at the member's array index. A transaction on the
+    // whole legacy array validates unrelated tombstoned members and can fail
+    // during concurrent deletes; an index transaction preserves every other
+    // member and cannot resurrect this ID after the tombstone is written.
+    if (member) {
+      const memberIndex = members.findIndex((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId);
+      if (memberIndex >= 0) {
+        const removal = await runTransaction(ref(firebaseDatabase, `appData/members/${memberIndex}`), (current) => {
+          if (current == null) return null;
+          if (current && typeof current === "object" && (current as { id?: unknown }).id === memberId) return null;
+          return;
+        });
+        if (!removal.committed) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
+      }
+    }
 
     const phone = typeof member?.phoneE164 === "string" ? member.phoneE164 : typeof member?.phone === "string" ? member.phone : "";
     if (phone) await runTransaction(ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`), (current) => current === memberId ? null : current);
@@ -166,6 +172,25 @@ export async function readAdminMember<T>(memberId: string) {
   const data = await readAdminData<{ members?: unknown }>();
   const members = Array.isArray(data?.members) ? data.members : [];
   return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
+}
+
+/** Read-only health check for records left behind by an interrupted delete. */
+export async function readAdminDeletionConflicts() {
+  if (!firebaseDatabase) return [] as Array<{ id: string; member: Record<string, unknown>; deletedAt: string }>;
+  const [membersSnapshot, tombstonesSnapshot] = await Promise.all([
+    get(ref(firebaseDatabase, "appData/members")),
+    get(ref(firebaseDatabase, "deletedMemberIds")),
+  ]);
+  const members = membersSnapshot.val();
+  const tombstones = tombstonesSnapshot.val() as Record<string, { deletedAt?: unknown }> | null;
+  if (!Array.isArray(members) || !tombstones || typeof tombstones !== "object") return [];
+  return members.flatMap((member) => {
+    if (!member || typeof member !== "object" || typeof (member as { id?: unknown }).id !== "string") return [];
+    const id = (member as { id: string }).id;
+    const tombstone = tombstones[id];
+    if (!tombstone) return [];
+    return [{ id, member: member as Record<string, unknown>, deletedAt: String(tombstone.deletedAt || "") }];
+  });
 }
 
 export async function readAdminExercises<T>() {
@@ -288,8 +313,32 @@ export async function writeAdminData<T>(
     });
   };
   arrayUpdates("exercises");
-  arrayUpdates("members");
   arrayUpdates("courses");
+
+  // Members are stored as a legacy array, but member writes must remain
+  // index-targeted. Replacing appData/members from a stale snapshot can
+  // resurrect a concurrently deleted member or discard another admin's write.
+  if (Array.isArray(appData.members)) {
+    const currentSnapshot = await get(ref(firebaseDatabase, "appData/members"));
+    const currentMembers = currentSnapshot.val();
+    const currentIndexes = new Map<string, number>();
+    if (Array.isArray(currentMembers)) {
+      currentMembers.forEach((member, index) => {
+        if (member && typeof member === "object" && typeof (member as { id?: unknown }).id === "string")
+          currentIndexes.set((member as { id: string }).id, index);
+      });
+    }
+    const nextMembers = appData.members as Array<Record<string, unknown>>;
+    for (const member of nextMembers) {
+      if (!member || typeof member.id !== "string") continue;
+      const index = currentIndexes.get(member.id);
+      const path = index === undefined
+        ? `appData/members/${Array.isArray(currentMembers) ? currentMembers.length : 0}`
+        : `appData/members/${index}`;
+      const current = index === undefined ? undefined : currentMembers[index];
+      if (!same(member, current)) updates[path] = stripUndefined(member);
+    }
+  }
 
   if (options.role === "SUPER_ADMIN") {
     for (const key of ["schemaVersion", "settings"] as const) {
