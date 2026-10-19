@@ -44,14 +44,15 @@ async function request<T>(path: string, init: RequestInit = {}) {
   return body as T
 }
 
-export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = true) {
+export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = false) {
   const normalizedPhone = normalizeIraqiPhone(phone)
   const token = await requireFreshAdminToken()
-  const result = await request<{ pin: string }>('/v1/admin/member-pin', {
+  const result = await request<{ pin: string | null; existing?: boolean; credentialVersion?: number }>('/v1/admin/member-pin', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ memberId, membershipId, phone: normalizedPhone, reset }),
   })
+  if (result.existing || result.pin === null) throw new Error('يوجد PIN ثابت لهذا المشترك. استخدم إعادة تعيين PIN لإصدار رمز جديد؛ لا يمكن كشف الرمز القديم لأنه محفوظ كـHash فقط.')
   if (!/^\d{4}$/.test(result.pin)) throw new Error('الخدمة أعادت PIN غير صالح')
   return result.pin
 }

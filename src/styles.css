@@ -196,3 +196,24 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .exercise-library-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .library-import-status{margin:0}.print-footer-note{display:grid;gap:7px;margin-top:16px;font-size:12px;font-weight:700;color:#303a2d}.print-footer-note textarea{min-height:88px;resize:vertical;border:1px solid #d1d5db;border-radius:9px;padding:10px;font:inherit;background:#fff;color:#1e1f1e}.upload-box.static-asset{height:auto;min-height:176px;padding:14px;align-items:stretch}.upload-box.static-asset img{align-self:center}.upload-box.static-asset input{position:static;opacity:1;width:100%;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff;color:#1e1f1e;font:inherit}.upload-box.static-asset small{overflow-wrap:anywhere}
 @media(max-width:600px){.modal-overlay{padding:8px}.modal{max-height:calc(100dvh - 16px);padding:14px}.modal-scroll-content{scrollbar-gutter:auto}.exercise-library-actions{width:100%;flex-direction:column}.exercise-library-actions button{width:100%}}
+
+/* Member portal: compact RTL cards with contained QR actions. */
+.member-hero{padding:24px 28px;border-radius:16px}
+.member-profile-facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.member-profile-facts span{display:grid;gap:3px;min-width:112px;padding:10px 13px;background:#f8faf5;border:1px solid #e2e9d9;border-radius:10px;font-size:12px;color:#1e1f1e}
+.member-profile-facts b{font-size:9px;color:#69735f;font-weight:600}
+.portal-workout{padding:24px 28px;border-radius:16px}
+.portal-workout-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+.portal-workout-head h2{margin:0 0 4px;font-size:18px;color:#1e1f1e}
+.portal-workout-head p{margin:0;color:#69735f;font-size:11px}
+.portal-exercise-card{display:grid;grid-template-columns:minmax(0,1fr) 240px 150px;gap:18px;align-items:center;padding:18px 0;border-top:1px solid #e5e9e2}
+.portal-exercise-topline{display:flex;align-items:center;gap:12px;min-width:0}
+.portal-exercise-title h3{margin:0;font-size:15px;color:#1e1f1e;overflow-wrap:anywhere}
+.portal-exercise-title span{display:block;margin-top:5px;color:#69735f;font-size:11px}
+.portal-exercise-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.portal-exercise-stats span{display:grid;gap:2px;padding:8px 9px;background:#f8faf5;border:1px solid #e2e9d9;border-radius:8px;color:#1e1f1e;font-size:11px;text-align:center}
+.portal-exercise-stats b{font-size:8px;color:#69735f;font-weight:600}
+.portal-exercise-link{min-width:0;width:100%;box-sizing:border-box}
+.portal-exercise-link svg{max-width:100%;height:auto;flex:0 0 auto}
+.danger-btn{color:#9b3d32!important;border-color:#e4b5ae!important;background:#fff7f5!important}
+@media(max-width:700px){.member-portal{padding:18px 12px}.member-hero{margin-top:22px;padding:18px}.member-hero h1{font-size:22px}.member-profile-facts{gap:7px}.member-profile-facts span{flex:1;min-width:90px}.portal-workout{padding:18px}.portal-workout-head{align-items:flex-start;flex-direction:column}.portal-exercise-card{grid-template-columns:1fr;gap:12px;padding:16px 0}.portal-exercise-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.portal-exercise-stats span{padding:7px 4px;font-size:10px}.portal-exercise-link{justify-self:stretch;min-height:62px}.day-tabs{width:100%;padding-bottom:4px}.day-tabs button{flex:1;min-width:0}}
