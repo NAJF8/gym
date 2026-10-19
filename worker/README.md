@@ -25,6 +25,15 @@ Required Worker secrets/variables:
   `pin_attempt_buckets` tables documented in schema.sql. Do not run schema.sql
   against an existing database.
 
+Image upload additionally requires a GitHub App installation with the minimum
+`Contents: read/write` and `Actions: read` permissions, stored only as Worker
+secrets/variables: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and
+`GITHUB_APP_PRIVATE_KEY`. The checked-in Worker fixes the repository, branch,
+and `public/uploads/print/` path; clients cannot choose them. Protected
+branches are rejected rather than bypassed. Apply migration `0004_image_uploads`
+before enabling the endpoint. The Firebase settings URL is updated by the
+client only after the corresponding Staging Actions run succeeds.
+
 The checked-in Wrangler configuration targets the separately named Staging
 Worker and Staging D1 only. No Worker deployment or production secret setup is
 performed by this change.
