@@ -12,7 +12,31 @@
     "appData": {
       ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
       "settings": {
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
+        "logo": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        },
+        "printCoachPhotoUrl": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        },
+        "printHallPhotoUrl": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        },
+        "printFooterNote": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 500"
+        },
+        "phone": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 64"
+        },
+        "instagram": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        }
       },
       "schemaVersion": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"

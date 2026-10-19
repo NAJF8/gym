@@ -429,3 +429,25 @@ export function watchPublicExercise<T>(
     },
   );
 }
+
+/** Scoped settings write for authorized gym managers. Never writes the settings parent node. */
+export async function saveManagerPrintSettings(values: {
+  logo: string; printCoachPhotoUrl: string; printHallPhotoUrl: string;
+  printFooterNote: string; phone: string; instagram: string;
+}) {
+  if (!firebaseDatabase) throw new Error("Firebase RTDB غير مهيأ");
+  const changes: Record<string, string> = {};
+  for (const key of ["logo","printCoachPhotoUrl","printHallPhotoUrl","printFooterNote","phone","instagram"] as const) {
+    const value = values[key].trim();
+    const max = key === "printFooterNote" ? 500 : key === "phone" ? 64 : 512;
+    if (value.length > max) throw new Error("القيمة طويلة جداً: " + key);
+    if (["logo","printCoachPhotoUrl","printHallPhotoUrl"].includes(key) &&
+       value && !(value.startsWith("/") && !value.startsWith("//") && !value.includes("..")) &&
+       !/^https:\/\//i.test(value)) throw new Error("رابط الصورة يجب أن يبدأ بـ HTTPS أو /assets/");
+    changes[key] = value;
+  }
+  await update(ref(firebaseDatabase,"appData/settings"),changes);
+  const verified = (await get(ref(firebaseDatabase,"appData/settings"))).val() as Record<string, unknown> | null;
+  if (!verified || Object.keys(changes).some(key => verified[key] !== changes[key]))
+    throw new Error("تعذر تأكيد حفظ إعدادات الطباعة");
+}

@@ -49,6 +49,7 @@ import {
   watchAdminData,
   watchPublicExercise,
   writeAdminData,
+  saveManagerPrintSettings,
   deleteAdminMember,
   reserveMemberPhone,
   releaseMemberPhone,
@@ -1055,20 +1056,7 @@ function App({
                 role === "SUPER_ADMIN" ? (
                   <SettingsPage s={settings} setS={setSettings} />
                 ) : (
-                  <div className="settings-page">
-                    <section className="settings-block">
-                      <h2>إعدادات الموقع وهوية الطباعة</h2>
-                      <p>يمكنك الاطلاع على الإعدادات بصلاحية المدير. تعديل الإعدادات وحفظها يتطلب صلاحية Super Admin لحماية بيانات القاعة.</p>
-                      <div className="form-grid">
-                        <label>اسم القاعة<input value={settings.gymName} readOnly /></label>
-                        <label>اسم الكابتن<input value={settings.coachName} readOnly /></label>
-                        <label>شعار القاعة للطباعة<input value={settings.logo} readOnly dir="ltr" /></label>
-                        <label>صورة/لوجو الكابتن للطباعة<input value={settings.printCoachPhotoUrl} readOnly dir="ltr" /></label>
-                        <label>صورة خلفية القاعة للطباعة<input value={settings.printHallPhotoUrl} readOnly dir="ltr" /></label>
-                      </div>
-                      <label>معلومات نهاية ملف الطباعة<textarea value={settings.printFooterNote} readOnly /></label>
-                    </section>
-                  </div>
+                  <ManagerPrintSettings initial={settings} onSaved={setSettings} />
                 )
               )}
               {page === "admins" && role === "SUPER_ADMIN" && <AdminManagementPage />}
@@ -2624,6 +2612,72 @@ function AdminManagementPage() {
   const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(email, role); setEmail(''); setMessage('تم إنشاء دعوة محددة الصلاحية. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
   const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; try { await updateManagedAdmin(item.uid || '', action, action === 'role' ? (item.role === 'MANAGER' ? 'SUPER_ADMIN' : 'MANAGER') : undefined, value); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
   return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والصلاحيات</h2><p>الدعوات لا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة مدير</h3><div className="form-grid"><label>البريد الإلكتروني<input dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="manager@example.com" /></label><label>نوع الصلاحية<select value={role} onChange={e => setRole(e.target.value as ManagedAdmin['role'])}><option value="MANAGER">MANAGER</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></label></div><Button onClick={add} icon={<Plus size={16} />}>{busy ? 'جارٍ الإنشاء…' : 'إضافة المدير'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المدير</th><th>الدور</th><th>الحالة</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td><b>{item.displayName || '—'}</b><div dir="ltr">{item.email}</div></td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.createdAt ? new Date(item.createdAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا يوجد مدراء إضافيون" text="أنشئ دعوة اختبارية من النموذج أعلاه." />}</section></div>;
+}
+function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved: React.Dispatch<React.SetStateAction<SettingsData>>}) {
+  const [values,setValues]=useState(()=>({
+    logo:initial.logo, printCoachPhotoUrl:initial.printCoachPhotoUrl,
+    printHallPhotoUrl:initial.printHallPhotoUrl, printFooterNote:initial.printFooterNote,
+    phone:initial.phone, instagram:initial.instagram
+  }));
+  useEffect(() => {
+    setValues({
+      logo: initial.logo,
+      printCoachPhotoUrl: initial.printCoachPhotoUrl,
+      printHallPhotoUrl: initial.printHallPhotoUrl,
+      printFooterNote: initial.printFooterNote,
+      phone: initial.phone,
+      instagram: initial.instagram,
+    });
+  }, [initial.logo, initial.printCoachPhotoUrl, initial.printHallPhotoUrl, initial.printFooterNote, initial.phone, initial.instagram]);
+  const [status,setStatus]=useState("");
+  const [saving,setSaving]=useState(false);
+  const change=(key:keyof typeof values,value:string)=>{setValues(x=>({...x,[key]:value}));setStatus("");};
+  const save=async()=>{
+    if(saving)return;
+    setSaving(true);setStatus("جارٍ الحفظ...");
+    try{
+      for(const url of [values.logo,values.printCoachPhotoUrl,values.printHallPhotoUrl]) {
+        if(url && !safeImageUrl(url) && !(url.startsWith("/") && !url.startsWith("//") && !url.includes("..")))
+          throw new Error("رابط الصورة غير صالح؛ استخدم HTTPS أو ملف الاستضافة الحالي.");
+      }
+      await saveManagerPrintSettings(values);
+      onSaved(x=>({...x,...values}));
+      setStatus("تم الحفظ والتحقق من Firebase.");
+    }catch(e){setStatus(e instanceof Error?e.message:"فشل الحفظ");}
+    finally{setSaving(false);}
+  };
+  const previewUrl=(value:string) => {
+    const safe = safeImageUrl(value);
+    if (safe) return safe;
+    if (value.startsWith("/") && !value.startsWith("//") && !value.includes("..")) return value;
+    return null;
+  };
+  const photo=(label:string,key:"logo"|"printCoachPhotoUrl"|"printHallPhotoUrl")=><label className="upload-box static-asset" key={key}>
+    <span>{label}</span>
+    {previewUrl(values[key]) ? <img src={previewUrl(values[key])!} alt={label} style={{maxWidth:"180px",maxHeight:"130px",objectFit:"contain",display:"block",margin:"12px auto"}}/> : null}
+    <input dir="ltr" value={values[key]} onChange={e=>change(key,e.target.value)} placeholder="https://example.com/photo.webp" />
+    <small>رابط HTTPS أو صورة موجودة ضمن ملفات الموقع، وليس رفعاً من الجهاز.</small>
+  </label>;
+  return <div className="settings-page"><section className="settings-block">
+    <h2>إعدادات الموقع وهوية الطباعة</h2>
+    <p>يمكن للمدير تعديل هوية الطباعة وبيانات التواصل فقط. إعدادات النظام الأخرى محصورة بالمشرف العام.</p>
+    <div className="form-grid">
+      <label>اسم القاعة<input value={initial.gymName} readOnly /></label>
+      <label>اسم الكابتن<input value={initial.coachName} readOnly /></label>
+    </div>
+    <div className="upload-grid">
+      {photo("شعار القاعة للطباعة","logo")}
+      {photo("صورة/لوجو الكابتن للطباعة","printCoachPhotoUrl")}
+      {photo("صورة خلفية القاعة للطباعة","printHallPhotoUrl")}
+    </div>
+    <div className="form-grid">
+      <label>رقم الهاتف<input value={values.phone} onChange={e=>change("phone",e.target.value)} dir="ltr" /></label>
+      <label>حساب الإنستغرام<input value={values.instagram} onChange={e=>change("instagram",e.target.value)} dir="ltr" /></label>
+    </div>
+    <label>معلومات نهاية ملف الطباعة<textarea rows={4} value={values.printFooterNote} maxLength={500} onChange={e=>change("printFooterNote",e.target.value)} /></label>
+    <Button onClick={save} disabled={saving}>{saving?"جارٍ الحفظ…":"حفظ إعدادات الطباعة"}</Button>
+    <p role="status">{status}</p>
+  </section></div>;
 }
 function SettingsPage({
   s,
