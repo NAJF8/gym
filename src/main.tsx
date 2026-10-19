@@ -2619,6 +2619,16 @@ function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved
     printHallPhotoUrl:initial.printHallPhotoUrl, printFooterNote:initial.printFooterNote,
     phone:initial.phone, instagram:initial.instagram
   }));
+  useEffect(() => {
+    setValues({
+      logo: initial.logo,
+      printCoachPhotoUrl: initial.printCoachPhotoUrl,
+      printHallPhotoUrl: initial.printHallPhotoUrl,
+      printFooterNote: initial.printFooterNote,
+      phone: initial.phone,
+      instagram: initial.instagram,
+    });
+  }, [initial.logo, initial.printCoachPhotoUrl, initial.printHallPhotoUrl, initial.printFooterNote, initial.phone, initial.instagram]);
   const [status,setStatus]=useState("");
   const [saving,setSaving]=useState(false);
   const change=(key:keyof typeof values,value:string)=>{setValues(x=>({...x,[key]:value}));setStatus("");};
@@ -2636,9 +2646,15 @@ function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved
     }catch(e){setStatus(e instanceof Error?e.message:"فشل الحفظ");}
     finally{setSaving(false);}
   };
+  const previewUrl=(value:string) => {
+    const safe = safeImageUrl(value);
+    if (safe) return safe;
+    if (value.startsWith("/") && !value.startsWith("//") && !value.includes("..")) return value;
+    return null;
+  };
   const photo=(label:string,key:"logo"|"printCoachPhotoUrl"|"printHallPhotoUrl")=><label className="upload-box static-asset" key={key}>
     <span>{label}</span>
-    {values[key] && safeImageUrl(values[key]) ? <img src={values[key]} alt={label} style={{maxWidth:"180px",maxHeight:"130px",objectFit:"contain",display:"block",margin:"12px auto"}}/> : null}
+    {previewUrl(values[key]) ? <img src={previewUrl(values[key])!} alt={label} style={{maxWidth:"180px",maxHeight:"130px",objectFit:"contain",display:"block",margin:"12px auto"}}/> : null}
     <input dir="ltr" value={values[key]} onChange={e=>change(key,e.target.value)} placeholder="https://example.com/photo.webp" />
     <small>رابط HTTPS أو صورة موجودة ضمن ملفات الموقع، وليس رفعاً من الجهاز.</small>
   </label>;

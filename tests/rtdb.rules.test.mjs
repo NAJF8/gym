@@ -150,6 +150,24 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   assert.equal(snapshot.val().name, 'emulator-sync-ok')
 })
 
+test('MANAGER can write only scoped print identity fields', async () => {
+  const manager = verifiedContext('manager').database()
+  const allowed = {
+    logo: '/assets/logo.webp',
+    printCoachPhotoUrl: 'https://example.test/coach.webp',
+    printHallPhotoUrl: '/assets/hall.webp',
+    printFooterNote: 'نص ختامي اختباري',
+    phone: '+9647800000000',
+    instagram: '@alasas.fit',
+  }
+  await assertSucceeds(update(ref(manager, 'appData/settings'), allowed))
+  const saved = await assertSucceeds(get(ref(manager, 'appData/settings')))
+  for (const [key, value] of Object.entries(allowed)) assert.equal(saved.val()[key], value)
+  await assertFails(set(ref(manager, 'appData/settings/gymName'), 'manager-must-not-change-this'))
+  await assertFails(update(ref(manager, 'appData/settings'), { gymName: 'manager-must-not-change-this', logo: '/assets/allowed.webp' }))
+  await assertFails(set(ref(manager, 'appData/settings/printFooterNote'), 'x'.repeat(501)))
+})
+
 test('member creation and program update sync between two authorized sessions', async () => {
   const firstSession = verifiedContext('super').database()
   const secondSession = verifiedContext('manager').database()
