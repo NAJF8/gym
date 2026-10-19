@@ -65,9 +65,7 @@ jobs:
           fi
       - name: Deploy RTDB rules to Staging only
         if: steps.rules.outputs.changed == 'true'
-        env:
-          FIREBASE_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: npx -y firebase-tools@latest deploy --only database --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}" --token "$FIREBASE_TOKEN"
+        run: npx -y firebase-tools@latest deploy --only database --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}"
       - name: Apply reviewed Staging D1 migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -77,6 +75,4 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx -y wrangler@latest deploy --config worker/wrangler.toml
       - name: Deploy staging site
-        env:
-          FIREBASE_TOKEN: ${{ steps.auth.outputs.access_token }}
-        run: npx -y firebase-tools@latest deploy --only hosting --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}" --token "$FIREBASE_TOKEN"
+        run: npx -y firebase-tools@latest deploy --only hosting --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}"
