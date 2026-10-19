@@ -339,7 +339,7 @@ async function sessionMember(env: Env, request: Request) {
 
 async function issuePin(env: Env, request: Request) {
   await verifyAdmin(env, request);
-  const body = await request.json() as { memberId?: unknown; phone?: unknown };
+  const body = await request.json() as { memberId?: unknown; phone?: unknown; reset?: unknown };
   if (typeof body.memberId !== "string" || !body.memberId) throw new Error("MEMBER_REQUIRED");
   const { member } = await readMember(env, body.memberId);
   const storedPhone = normalizePhone(member.phoneE164 ?? member.phoneDisplay ?? member.phone);
@@ -351,7 +351,24 @@ async function issuePin(env: Env, request: Request) {
   const now = Date.now();
   const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
   const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
-  await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at").bind(crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
+  const phoneOwner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ? AND member_id <> ?").bind(phone, body.memberId).first<{ member_id: string }>();
+  if (phoneOwner) throw new Error("PHONE_ALREADY_BOUND");
+  const reset = body.reset === true;
+  const existing = await env.PIN_DB.prepare("SELECT status, credential_version FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; credential_version: number }>();
+  if (existing?.status === "ACTIVE" && !reset) {
+    return json({ pin: null, existing: true, credentialVersion: existing.credential_version }, 200, cors(env, request.headers.get("origin") || ""));
+  }
+  const statement = "INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?)";
+  const values = [crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()] as const;
+  if (reset) {
+    await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at`).bind(...values).run();
+  } else {
+    const inserted = await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO NOTHING`).bind(...values).run();
+    if (!inserted.meta?.changes) {
+      const raced = await env.PIN_DB.prepare("SELECT credential_version FROM member_credentials WHERE member_id = ? AND status = 'ACTIVE'").bind(body.memberId).first<{ credential_version: number }>();
+      return json({ pin: null, existing: true, credentialVersion: raced?.credential_version ?? 1 }, 200, cors(env, request.headers.get("origin") || ""));
+    }
+  }
   await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key IN (?, ?)").bind(`account:${body.memberId}`, `phone:${phone}`).run();
   return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
@@ -433,7 +450,7 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
       const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);

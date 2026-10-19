@@ -2095,14 +2095,14 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     if (ok) { setShow(false); setEditing(null); }
   };
   const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); };
-  const issue = async (m: Member, requestedPhone: string) => {
+  const issue = async (m: Member, requestedPhone: string, reset = false) => {
     setPinBusy(true); setPinError(''); setPin('');
     try {
       const phone = normalizeIraqiPhone(requestedPhone);
       const remote = await readAdminData<AppPayload>();
       const persisted = normalizeMembers(remote?.members).find(item => item.id === m.id);
       if (!persisted) throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');
-    setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, true)); setPinMember(persisted);
+    setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, reset)); setPinMember(persisted);
       setIssueTarget(null); setIssuePhone('');
     } catch (e) { setPinError(e instanceof Error ? e.message : 'تعذر إصدار PIN من الخدمة الموثوقة'); }
     finally { setPinBusy(false); }
@@ -2131,10 +2131,10 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     {deletionConflicts.length > 0 && <section className="panel" role="region" aria-label="سجلات حذف غير مكتملة"><h3>سجلات تحتاج إكمال الحذف</h3><p>هذه السجلات تحمل Tombstone لكنها بقيت في RTDB بعد انقطاع أو سباق سابق. لا يمكن إصدار PIN لها.</p>{deletionConflicts.map(conflict => <div key={conflict.id} className="save-status"><b>{String(conflict.member.name || 'عضوية')}</b><span dir="ltr"> {conflict.id}</span><button className="text-btn" disabled={Boolean(deletingId)} onClick={() => remove({ id: conflict.id, name: String(conflict.member.name || 'العضوية') } as Member)}>إكمال الحذف</button></div>)}</section>}
     {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
     {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
-    {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>إصدار PIN لـ {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'}</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone)}>{pinBusy ? 'جارٍ الإصدار…' : 'إصدار PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
+    {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>بيانات الدخول — {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'} · إصدار PIN الأول لا يتغير عند تكرار الطلب.</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone, false)}>{pinBusy ? 'جارٍ التحقق…' : 'إصدار PIN لأول مرة'}</button><button className="secondary-btn danger-btn" disabled={pinBusy} onClick={() => { if (window.confirm('إعادة تعيين PIN ستبطل الرمز الحالي فوراً وتصدر رمزاً جديداً. هل تريد المتابعة؟')) void issue(issueTarget, issuePhone, true); }}>{pinBusy ? 'جارٍ المعالجة…' : 'إعادة تعيين PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
     {pin && <section className="pin-card" role="status" aria-label="بطاقة رمز الدخول"><header><b>✓ تم إصدار رمز الدخول بنجاح</b><button className="icon-btn" aria-label="إغلاق بطاقة PIN" onClick={() => { setPin(''); setPinMember(null); }}><X size={17}/></button></header><div className="pin-card-meta"><span>المشترك: <b>{pinMember?.name || '—'}</b></span><span>رقم العضوية: <b>{pinMember?.membershipId || '—'}</b></span></div><p>رمز الدخول الخاص بك</p><strong dir="ltr">{pin.split('').join('  ')}</strong><div><button className="primary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة البطاقة</button><button className="secondary-btn" onClick={() => { setPin(''); setPinMember(null); }}>إغلاق</button></div><small>🔒 يظهر هذا الرمز مرة واحدة فقط، ولا يُحفظ في المتصفح أو Firebase.</small></section>}
     {pinError && <p className="auth-error" role="alert">{pinError}</p>}
-    {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إصدار / إعادة إصدار PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
+    {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />بيانات الدخول / PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
     {(show || editing) && <MemberWizard initial={editing} exercises={exercises} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
   </>;
 }
@@ -2417,17 +2417,24 @@ function MemberPortal({
             عضوية نشطة
           </span>
           <h1>{m.name}</h1>
-          <p>
-            رقم العضوية: {m.membershipId || "—"} · خطة التدريب الخاصة بك ·{" "}
-            {m.height || "—"} سم · {m.weight || "—"} كغم
-          </p>
+          <div className="member-profile-facts" aria-label="بيانات المشترك">
+            <span><b>رقم العضوية</b>{m.membershipId || "—"}</span>
+            <span><b>الطول</b>{m.height || "—"} سم</span>
+            <span><b>الوزن</b>{m.weight || "—"} كغم</span>
+          </div>
         </div>
       </section>
       {m.days.length ? (
         <section className="panel portal-workout">
-          <div className="day-tabs">
+          <div className="portal-workout-head">
+            <div><h2>خطة التمرين</h2><p>اختر اليوم ثم افتح شرح أي تمرين عند الحاجة.</p></div>
+            <span className="availability-badge">{list.length} تمارين اليوم</span>
+          </div>
+          <div className="day-tabs" role="tablist" aria-label="أيام التدريب">
             {m.days.map((d, i) => (
               <button
+                role="tab"
+                aria-selected={day === i}
                 className={day === i ? "active" : ""}
                 onClick={() => setDay(i)}
                 key={i}
@@ -2438,32 +2445,21 @@ function MemberPortal({
             ))}
           </div>
           {list.map((e) => (
-            <div className="portal-exercise" key={e.id}>
-              <button
-                className={done.includes(e.id) ? "check-btn done" : "check-btn"}
-                onClick={() =>
-                  setDone((x) =>
-                    x.includes(e.id)
-                      ? x.filter((i) => i !== e.id)
-                      : [...x, e.id],
-                  )
-                }
-              >
-                {done.includes(e.id) && <Check size={15} />}
-              </button>
-              <div>
-                <b>{e.name}</b>
-                <span>{e.muscle}</span>
+            <article className="portal-exercise-card" key={e.id}>
+              <div className="portal-exercise-topline">
+                <button aria-label={`تحديد ${e.name}`} className={done.includes(e.id) ? "check-btn done" : "check-btn"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>
+                  {done.includes(e.id) && <Check size={15} />}
+                </button>
+                <div className="portal-exercise-title"><h3>{e.name}</h3><span>{e.muscle}</span></div>
               </div>
-              <strong>
-                {e.sets} × {e.reps}
-              </strong>
-              <span>راحة {e.rest}</span>
-              <a className="portal-exercise-link" href={exerciseUrl(e.id)} target="_blank" rel="noopener noreferrer" aria-label={`اضغط لعرض التمرين: ${e.name}`}>
-                <QRCodeSVG value={exerciseUrl(e.id)} size={52} includeMargin level="M" />
-                <span>اضغط لعرض التمرين <ExternalLink size={14}/></span>
+              <div className="portal-exercise-stats" aria-label="تفاصيل التمرين">
+                <span><b>المجاميع</b>{e.sets}</span><span><b>التكرارات</b>{e.reps}</span><span><b>الراحة</b>{e.rest || "—"}</span><span><b>الوزن</b>{e.weight || "—"}</span>
+              </div>
+              <a className="portal-exercise-link" href={exerciseUrl(e.id)} target="_blank" rel="noopener noreferrer" aria-label={`فتح شرح التمرين: ${e.name}`}>
+                <QRCodeSVG value={exerciseUrl(e.id)} size={56} includeMargin level="M" />
+                <span>فتح شرح التمرين <ExternalLink size={14}/></span>
               </a>
-            </div>
+            </article>
           ))}
         </section>
       ) : (
