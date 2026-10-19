@@ -16,6 +16,13 @@ interface Env {
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
   AUTH_DIAGNOSTICS?: string;
+  GITHUB_APP_ID?: string;
+  GITHUB_INSTALLATION_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_OWNER?: string;
+  GITHUB_REPO?: string;
+  GITHUB_BRANCH?: string;
+  STAGING_IMAGE_BASE_URL?: string;
 }
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -120,6 +127,140 @@ async function firebaseGetWithIdToken(env: Env, path: string, idToken: string) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("Firebase read failed");
   return response.json();
+}
+
+const imageSlots = {
+  logo: { prefix: "gym-logo", setting: "logo" },
+  coach: { prefix: "coach-photo", setting: "printCoachPhotoUrl" },
+  hall: { prefix: "hall-background", setting: "printHallPhotoUrl" },
+} as const;
+
+function githubConfig(env: Env) {
+  const appId = env.GITHUB_APP_ID?.trim();
+  const installationId = env.GITHUB_INSTALLATION_ID?.trim();
+  const privateKey = env.GITHUB_APP_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
+  const owner = env.GITHUB_OWNER?.trim();
+  const repo = env.GITHUB_REPO?.trim();
+  const branch = env.GITHUB_BRANCH?.trim();
+  if (!appId || !installationId || !privateKey || !owner || !repo || !branch)
+    throw new Error("GITHUB_UPLOAD_NOT_CONFIGURED");
+  if (!/^\d+$/.test(appId) || !/^\d+$/.test(installationId) || !/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo) || !/^[A-Za-z0-9_.\/-]+$/.test(branch))
+    throw new Error("GITHUB_UPLOAD_NOT_CONFIGURED");
+  return { appId, installationId, privateKey, owner, repo, branch };
+}
+
+async function githubInstallationToken(env: Env) {
+  const config = githubConfig(env);
+  const now = Math.floor(Date.now() / 1000);
+  const header = encodeBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claims = encodeBase64Url(JSON.stringify({ iat: now - 30, exp: now + 540, iss: config.appId }));
+  let keyBytes: Uint8Array;
+  try { keyBytes = pemToBytes(config.privateKey); } catch { throw new Error("GITHUB_PRIVATE_KEY_INVALID"); }
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey("pkcs8", keyBytes, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  } catch { throw new Error("GITHUB_PRIVATE_KEY_INVALID"); }
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(`${header}.${claims}`));
+  const jwt = `${header}.${claims}.${encodeBase64Url(signature)}`;
+  const response = await fetch(`https://api.github.com/app/installations/${config.installationId}/access_tokens`, {
+    method: "POST",
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" },
+  });
+  if (!response.ok) throw new Error("GITHUB_AUTH_FAILED");
+  const body = await response.json() as { token?: string };
+  if (!body.token) throw new Error("GITHUB_AUTH_FAILED");
+  return { token: body.token, config };
+}
+
+async function githubRequest(env: Env, path: string, init: RequestInit = {}) {
+  const { token, config } = await githubInstallationToken(env);
+  const response = await fetch(`https://api.github.com${path}`, {
+    ...init,
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28", ...(init.headers || {}) },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.log(JSON.stringify({ github_status: response.status, github_operation: path.split("?")[0] }));
+    throw new Error(response.status === 422 ? "GITHUB_BRANCH_PROTECTED" : "GITHUB_API_FAILED");
+  }
+  return { body: body as Record<string, unknown>, config };
+}
+
+function bytesFromBase64(value: string) {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) throw new Error("IMAGE_CONTENT_INVALID");
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function detectedImageType(bytes: Uint8Array) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
+  return "";
+}
+
+async function imageUploadRateLimit(env: Env, actorUid: string, request: Request) {
+  const now = Date.now();
+  const cutoff = now - 60_000;
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  const buckets = [`uid:${actorUid}`, `ip:${ip}`];
+  for (const bucket of buckets) {
+    await env.PIN_DB.prepare("INSERT INTO image_upload_rate_limits (bucket_key, window_started, request_count) VALUES (?, ?, 1) ON CONFLICT(bucket_key) DO UPDATE SET request_count = CASE WHEN window_started < ? THEN 1 ELSE request_count + 1 END, window_started = CASE WHEN window_started < ? THEN ? ELSE window_started END").bind(bucket, now, cutoff, cutoff, now).run();
+    const row = await env.PIN_DB.prepare("SELECT request_count FROM image_upload_rate_limits WHERE bucket_key = ?").bind(bucket).first() as { request_count?: number } | null;
+    if (Number(row?.request_count || 0) > 10) throw new Error("IMAGE_UPLOAD_RATE_LIMITED");
+  }
+}
+
+async function uploadPrintImage(env: Env, request: Request) {
+  const actorUid = await verifyAdmin(env, request);
+  await imageUploadRateLimit(env, actorUid, request);
+  const body = await request.json() as { slot?: unknown; contentType?: unknown; content?: unknown };
+  const slot = typeof body.slot === "string" && body.slot in imageSlots ? body.slot as keyof typeof imageSlots : "";
+  const contentType = typeof body.contentType === "string" ? body.contentType : "";
+  const content = typeof body.content === "string" ? body.content : "";
+  if (!slot || !["image/png", "image/jpeg", "image/webp"].includes(contentType)) throw new Error("IMAGE_TYPE_INVALID");
+  if (content.length > 11_185_000) throw new Error("IMAGE_CONTENT_INVALID");
+  const bytes = bytesFromBase64(content);
+  if (!bytes.length || bytes.length > 8 * 1024 * 1024 || detectedImageType(bytes) !== contentType) throw new Error("IMAGE_CONTENT_INVALID");
+  const extension = contentType === "image/png" ? "png" : contentType === "image/jpeg" ? "jpg" : "webp";
+  const config = githubConfig(env);
+  const branchInfo = await githubRequest(env, `/repos/${config.owner}/${config.repo}/branches/${encodeURIComponent(config.branch)}`);
+  if (branchInfo.body.protected === true) throw new Error("GITHUB_BRANCH_PROTECTED");
+  const path = `public/uploads/print/${imageSlots[slot].prefix}-${crypto.randomUUID()}.${extension}`;
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const upload = await githubRequest(env, `/repos/${config.owner}/${config.repo}/contents/${encodedPath}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message: `chore(staging): upload ${imageSlots[slot].prefix}`, content, branch: config.branch }),
+  });
+  const commit = typeof upload.body.commit === "object" && upload.body.commit ? upload.body.commit as { sha?: unknown } : {};
+  const commitSha = typeof commit.sha === "string" ? commit.sha : "";
+  if (!commitSha) throw new Error("GITHUB_COMMIT_MISSING");
+  const stored = await githubRequest(env, `/repos/${config.owner}/${config.repo}/contents/${encodedPath}?ref=${encodeURIComponent(config.branch)}`);
+  const storedContent = typeof stored.body.content === "string" ? stored.body.content.replace(/\s/g, "") : "";
+  if (!storedContent || storedContent !== content) throw new Error("GITHUB_CONTENT_VERIFY_FAILED");
+  await env.PIN_DB.prepare("INSERT INTO image_upload_audit (audit_id, actor_uid, slot, path, commit_sha, byte_count, content_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), actorUid, slot, path, commitSha, bytes.length, contentType, Date.now()).run();
+  return json({ path, commitSha, setting: imageSlots[slot].setting }, 202, cors(env, request.headers.get("origin") || ""));
+}
+
+async function imageDeploymentStatus(env: Env, request: Request) {
+  await verifyAdmin(env, request);
+  const body = await request.json() as { commitSha?: unknown; path?: unknown };
+  const commitSha = typeof body.commitSha === "string" && /^[0-9a-f]{7,64}$/i.test(body.commitSha) ? body.commitSha : "";
+  const path = typeof body.path === "string" && /^public\/uploads\/print\/[A-Za-z0-9_.-]+\.(png|jpg|webp)$/.test(body.path) ? body.path : "";
+  if (!commitSha || !path) throw new Error("IMAGE_STATUS_INVALID");
+  const { token, config } = await githubInstallationToken(env);
+  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=20`, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" } });
+  if (!response.ok) throw new Error("GITHUB_API_FAILED");
+  const runs = await response.json() as { workflow_runs?: Array<{ status?: string; conclusion?: string }> };
+  const run = runs.workflow_runs?.[0];
+  if (!run) return json({ state: "queued" }, 200, cors(env, request.headers.get("origin") || ""));
+  if (run.status !== "completed") return json({ state: "running" }, 200, cors(env, request.headers.get("origin") || ""));
+  if (run.conclusion !== "success") return json({ state: "failed" }, 200, cors(env, request.headers.get("origin") || ""));
+  const base = (env.STAGING_IMAGE_BASE_URL || "https://alasas-fit-staging.web.app").replace(/\/$/, "");
+  return json({ state: "deployed", deployedUrl: `${base}/${path.slice("public/".length)}` }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function verifyAdmin(env: Env, request: Request) {
@@ -439,6 +580,8 @@ export default {
     try {
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
+      if (url.pathname === "/v1/admin/image-upload") return await uploadPrintImage(env, request);
+      if (url.pathname === "/v1/admin/image-status") return await imageDeploymentStatus(env, request);
       if (url.pathname === "/v1/admin/member-pin") return await issuePin(env, request);
       if (url.pathname === "/v1/admin/member-revoke") return await revokeMember(env, request);
       if (url.pathname.startsWith('/v1/admin/management/')) return await adminManagement(env, request, url.pathname.split('/').pop() || '');
@@ -450,8 +593,9 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
-      const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب" };
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "IMAGE_UPLOAD_RATE_LIMITED" ? 429 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" || code === "GITHUB_BRANCH_PROTECTED" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const safeClientErrors = new Set(["GITHUB_UPLOAD_NOT_CONFIGURED", "GITHUB_BRANCH_PROTECTED", "IMAGE_TYPE_INVALID", "IMAGE_CONTENT_INVALID", "IMAGE_UPLOAD_RATE_LIMITED", "GITHUB_CONTENT_VERIFY_FAILED"]);
+      const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : safeClientErrors.has(code) ? code : "تعذر تنفيذ الطلب" };
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);
     }

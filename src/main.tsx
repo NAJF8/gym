@@ -65,6 +65,7 @@ import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
 import { safeImageUrl } from "./imageUrl";
+import { uploadPrintImage, waitForPrintImageDeployment, type PrintImageSlot } from "./imageUpload";
 import { mergeExerciseLibrary } from "./exerciseLibrary";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
@@ -108,6 +109,8 @@ type Member = {
   phone?: string;
   phoneE164?: string;
   phoneDisplay?: string;
+  /** Server CAS metadata; never compared as user-entered member data. */
+  version?: number;
 };
 type ReadyCourse = { id: string; name: string; days: DayPlan[] };
 type SettingsData = {
@@ -404,6 +407,31 @@ function normalizeMember(value: unknown): Member | null {
     authUid: raw.authUid == null ? undefined : String(raw.authUid),
     phoneE164,
     phoneDisplay,
+    version: typeof raw.version === "number" && Number.isInteger(raw.version) ? raw.version : undefined,
+  };
+}
+
+/**
+ * Canonical form for the fields owned by the member wizard.
+ * RTDB adds a version and may return keyed records in a different shape;
+ * neither is part of the form's persisted contract.
+ */
+function memberPersistenceProjection(value: unknown) {
+  const member = normalizeMember(value);
+  if (!member) return null;
+  return {
+    id: member.id,
+    membershipId: member.membershipId || "",
+    name: member.name,
+    height: member.height,
+    weight: member.weight,
+    createdAt: member.createdAt,
+    phoneE164: member.phoneE164 || "",
+    phoneDisplay: member.phoneDisplay || "",
+    photo: "",
+    days: member.days,
+    active: member.active !== false,
+    ...(member.authUid ? { authUid: member.authUid } : {}),
   };
 }
 
@@ -706,7 +734,18 @@ function CentralDataBridge({
     const save = async (requestedPayload: AppPayload = payload): Promise<boolean> => {
       if (busy) return false;
       const nextPayload = requestedPayload;
-      const previousForSave = lastRemote.current;
+      // Always derive the compare-and-swap baseline from an authoritative
+      // read immediately before writing. The realtime listener can still be
+      // behind while an admin is completing the wizard.
+      let previousForSave: AppPayload | null;
+      try {
+        previousForSave = await readAdminData<AppPayload>();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "تعذر قراءة Firebase قبل الحفظ";
+        setError(message);
+        window.dispatchEvent(new CustomEvent("alasas-save-status", { detail: message }));
+        return false;
+      }
       const previousExercises = Array.isArray(previousForSave?.exercises)
         ? previousForSave.exercises
         : [];
@@ -719,7 +758,7 @@ function CentralDataBridge({
         : [];
       const changedMembers = nextPayload.members.filter((member) => {
         const old = previousMembers.find((item) => item.id === member.id);
-        return !old || stableJson(normalizeMember(old)) !== stableJson(member);
+        return !old || stableJson(memberPersistenceProjection(old)) !== stableJson(memberPersistenceProjection(member));
       });
       const claimedPhones: Array<{ phone: string; memberId: string; oldPhone?: string }> = [];
       for (const member of changedMembers) {
@@ -806,12 +845,16 @@ function CentralDataBridge({
             const persisted = await readAdminMember<Member>(member.id);
             if (!persisted)
               throw firebaseSyncError("verify", "MEMBER_MISSING", `تعذر قراءة سجل المشترك ${member.id} بعد الحفظ`);
-            if (stableJson(normalizeMember(persisted)) !== stableJson(member))
+            const expected = memberPersistenceProjection(member);
+            const actual = memberPersistenceProjection(persisted);
+            if (!actual || actual.id !== member.id || stableJson(actual) !== stableJson(expected))
               throw firebaseSyncError("verify", "MEMBER_MISMATCH", `بيانات سجل المشترك ${member.id} لا تطابق المدخلات`);
           }
         }
         setRemotePresent(true);
-        lastRemote.current = nextPayload;
+        // Keep the authoritative server representation as the next baseline;
+        // do not let a local optimistic object hide a failed normalization.
+        lastRemote.current = check;
         window.dispatchEvent(
           new CustomEvent("alasas-save-status", { detail: "saved" }),
         );
@@ -2090,9 +2133,12 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     const nextMembers = members.some(a => a.id === m.id)
       ? members.map(a => a.id === m.id ? { ...a, ...m, photo: '', ...(m.authUid || a.authUid ? { authUid: m.authUid || a.authUid } : {}), ...(m.phoneE164 ? { phoneE164: m.phoneE164, phoneDisplay: m.phoneDisplay } : {}) } : a)
       : [{ ...m, photo: '' }, ...members];
-    setMembers(nextMembers);
     const ok = await requestMemberSave({ schemaVersion: 1, settings, exercises, members: nextMembers, courses });
-    if (ok) { setShow(false); setEditing(null); }
+    if (ok) {
+      setMembers(nextMembers);
+      setShow(false);
+      setEditing(null);
+    }
   };
   const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); };
   const issue = async (m: Member, requestedPhone: string, reset = false) => {
@@ -2648,12 +2694,7 @@ function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved
     if (value.startsWith("/") && !value.startsWith("//") && !value.includes("..")) return value;
     return null;
   };
-  const photo=(label:string,key:"logo"|"printCoachPhotoUrl"|"printHallPhotoUrl")=><label className="upload-box static-asset" key={key}>
-    <span>{label}</span>
-    {previewUrl(values[key]) ? <img src={previewUrl(values[key])!} alt={label} style={{maxWidth:"180px",maxHeight:"130px",objectFit:"contain",display:"block",margin:"12px auto"}}/> : null}
-    <input dir="ltr" value={values[key]} onChange={e=>change(key,e.target.value)} placeholder="https://example.com/photo.webp" />
-    <small>رابط HTTPS أو صورة موجودة ضمن ملفات الموقع، وليس رفعاً من الجهاز.</small>
-  </label>;
+  const photo=(label:string,key:"logo"|"printCoachPhotoUrl"|"printHallPhotoUrl",slot:PrintImageSlot)=><ImageSetting key={key} label={label} value={values[key]} setting={slot} onChange={value=>change(key,value)} persist={async value=>{const next={...values,[key]:value};await saveManagerPrintSettings(next);setValues(next);onSaved(x=>({...x,...next}));}} />;
   return <div className="settings-page"><section className="settings-block">
     <h2>إعدادات الموقع وهوية الطباعة</h2>
     <p>يمكن للمدير تعديل هوية الطباعة وبيانات التواصل فقط. إعدادات النظام الأخرى محصورة بالمشرف العام.</p>
@@ -2662,9 +2703,9 @@ function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved
       <label>اسم الكابتن<input value={initial.coachName} readOnly /></label>
     </div>
     <div className="upload-grid">
-      {photo("شعار القاعة للطباعة","logo")}
-      {photo("صورة/لوجو الكابتن للطباعة","printCoachPhotoUrl")}
-      {photo("صورة خلفية القاعة للطباعة","printHallPhotoUrl")}
+      {photo("شعار القاعة للطباعة","logo","logo")}
+      {photo("صورة/لوجو الكابتن للطباعة","printCoachPhotoUrl","coach")}
+      {photo("صورة خلفية القاعة للطباعة","printHallPhotoUrl","hall")}
     </div>
     <div className="form-grid">
       <label>رقم الهاتف<input value={values.phone} onChange={e=>change("phone",e.target.value)} dir="ltr" /></label>
@@ -2769,11 +2810,11 @@ function SettingsPage({
       </section>
       <section className="settings-block">
         <h2>هوية الطباعة</h2>
-        <p>ضع روابط صور HTTPS مباشرة للّوغو وصورة الكابتن. تُحفظ مع الإعدادات وتظهر في طباعة A4؛ لا تقبل الصفحة روابط غير آمنة أو بيانات صورة من المتصفح.</p>
+        <p>ارفع PNG أو JPG أو WebP من الجهاز. الرفع يمر عبر Worker موثوق ثم GitHub Actions، ولا يُحدّث الرابط المحفوظ إلا بعد نجاح نشر الصورة على Staging.</p>
         <div className="upload-grid">
-          <ImageSetting label="شعار القاعة للطباعة" value={s.logo} onChange={(value) => update("logo", value)} />
-          <ImageSetting label="صورة/لوجو الكابتن للطباعة" value={s.printCoachPhotoUrl} onChange={(value) => update("printCoachPhotoUrl", value)} />
-          <ImageSetting label="صورة خلفية القاعة للطباعة" value={s.printHallPhotoUrl} onChange={(value) => update("printHallPhotoUrl", value)} />
+          <ImageSetting label="شعار القاعة للطباعة" value={s.logo} setting="logo" onChange={(value) => update("logo", value)} persist={async value => { const next={...s,logo:value}; await saveManagerPrintSettings(next); setS(next); }} />
+          <ImageSetting label="صورة/لوجو الكابتن للطباعة" value={s.printCoachPhotoUrl} setting="coach" onChange={(value) => update("printCoachPhotoUrl", value)} persist={async value => { const next={...s,printCoachPhotoUrl:value}; await saveManagerPrintSettings(next); setS(next); }} />
+          <ImageSetting label="صورة خلفية القاعة للطباعة" value={s.printHallPhotoUrl} setting="hall" onChange={(value) => update("printHallPhotoUrl", value)} persist={async value => { const next={...s,printHallPhotoUrl:value}; await saveManagerPrintSettings(next); setS(next); }} />
         </div>
         <label className="print-footer-note">النص الختامي للمشترك<textarea maxLength={500} value={s.printFooterNote} onChange={(e) => update("printFooterNote", e.target.value)} placeholder="تعليمات الكابتن أو رسالة ختامية" /></label>
       </section>
@@ -2842,20 +2883,50 @@ function SettingsPage({
 function ImageSetting({
   label,
   value,
+  setting,
   onChange,
+  persist,
 }: {
   label: string;
   value: string;
+  setting: PrintImageSlot;
   onChange: (value: string) => void;
+  persist?: (value: string) => Promise<void>;
 }) {
+  const [selected, setSelected] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   const valid = !value || Boolean(safeImageUrl(value));
+  const choose = (file: File | null) => {
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(file ? URL.createObjectURL(file) : "");
+    setSelected(file);
+    setStatus(file ? "المعاينة جاهزة؛ اضغط رفع وحفظ." : "");
+  };
+  const upload = async () => {
+    if (!selected || busy) return;
+    setBusy(true); setStatus("جارٍ رفع الصورة إلى GitHub…");
+    try {
+      const result = await uploadPrintImage(setting, selected);
+      const deployedUrl = await waitForPrintImageDeployment(result.commitSha, result.path, setStatus);
+      if (persist) await persist(deployedUrl);
+      onChange(deployedUrl);
+      setSelected(null); setStatus("تم النشر والتحقق من الصورة على Staging.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "فشل رفع الصورة؛ بقيت الصورة القديمة.");
+    } finally { setBusy(false); }
+  };
   return (
-    <label className="upload-box static-asset">
-      {value && <img src={value} alt="" />}
+    <div className="upload-box static-asset">
+      {(preview || value) && <img src={preview || value} alt="" />}
       <span>{label}</span>
-      <input type="url" dir="ltr" value={value} onChange={(event) => onChange(event.target.value)} placeholder="https://example.com/logo.webp" />
-      <small>{valid ? "رابط HTTPS آمن أو ملف الاستضافة الحالي" : "يجب أن يكون الرابط HTTPS آمناً"}</small>
-    </label>
+      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => choose(event.target.files?.[0] || null)} />
+      {selected && <button type="button" className="secondary-btn" disabled={busy} onClick={() => void upload()}>{busy ? "جارٍ النشر…" : "رفع وحفظ الصورة"}</button>}
+      <small>{valid ? "PNG أو JPG أو WebP · الصورة القديمة تبقى حتى نجاح النشر" : "الرابط الحالي غير صالح"}</small>
+      {status && <small role="status">{status}</small>}
+    </div>
   );
 }
 function Modal({
