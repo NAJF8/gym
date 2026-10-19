@@ -2898,7 +2898,7 @@ function ImageSetting({
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
-  const valid = !value || Boolean(safeImageUrl(value));
+  const valid = !value || Boolean(safeImageUrl(value)) || (value.startsWith("/") && !value.startsWith("//") && !value.includes(".."));
   const choose = (file: File | null) => {
     if (preview) URL.revokeObjectURL(preview);
     setPreview(file ? URL.createObjectURL(file) : "");
