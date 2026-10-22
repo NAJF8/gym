@@ -1,5 +1,5 @@
-import { base64ToBytes, constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto";
-import { applyInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail } from "./invitations";
+import { base64ToBytes, constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto.ts";
+import { applyInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail } from "./invitations.ts";
 
 interface Env {
   PIN_DB: D1Database;
@@ -580,7 +580,14 @@ async function revealPin(env: Env, request: Request) {
         return json({ pin: body.candidatePin, credentialVersion: row.credential_version, source: "migrated" }, 200, cors(env, request.headers.get("origin") || ""));
       }
     }
-    throw new Error("PIN_LEGACY_HASH_ONLY");
+    const newPin = randomPin();
+    const credential = await hashPin(newPin);
+    const pinCipher = await encryptPin(newPin, pinCipherSecret(env), body.memberId);
+    const nextVersion = (row.credential_version ?? 1) + 1;
+    await env.PIN_DB.prepare("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, pin_cipher = ?, hash_algorithm = 'PBKDF2-SHA256', hash_iterations = ?, failure_count = 0, locked_until = NULL, credential_version = ?, updated_at = ?, last_pin_changed_at = ? WHERE member_id = ?").bind(credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, nextVersion, new Date(now).toISOString(), new Date(now).toISOString(), body.memberId).run();
+    await recordPinAudit(env, "PIN_RESET", actorUid, body.memberId, nextVersion);
+    await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, nextVersion);
+    return json({ pin: newPin, credentialVersion: nextVersion, source: "rotated_legacy" }, 200, cors(env, request.headers.get("origin") || ""));
   }
   const pin = await decryptPin(row.pin_cipher, pinCipherSecret(env), body.memberId);
   await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, row.credential_version);
