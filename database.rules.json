@@ -63,6 +63,9 @@
       "courses": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
       },
+      "categories": {
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
+      },
       "exercises": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
         "$exerciseId": {
@@ -76,6 +79,10 @@
       "$exerciseId": {
         ".validate": "newData.hasChildren(['id', 'name', 'muscle', 'sets', 'reps', 'rest', 'video']) && newData.child('id').isString() && newData.child('id').val().length <= 128 && newData.child('id').val() === $exerciseId && newData.child('name').isString() && newData.child('name').val().length <= 200 && newData.child('muscle').isString() && newData.child('muscle').val().length <= 120 && newData.child('sets').isNumber() && newData.child('sets').val() > 0 && newData.child('sets').val() <= 100 && newData.child('reps').isString() && newData.child('reps').val().length <= 64 && newData.child('rest').isString() && newData.child('rest').val().length <= 64 && newData.child('video').isString() && newData.child('video').val().length <= 512 && (newData.child('video').val() === '' || newData.child('video').val().matches(/^https:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be|vimeo\\.com)(\\/[A-Za-z0-9._~:\\/?#\\[\\]@!$&()*+,;=-]*)?$/))"
       }
+    },
+    "publicCourses": {
+      ".read": true,
+      ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
     },
     "bootstrap": {
       ".read": false,

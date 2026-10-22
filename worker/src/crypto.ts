@@ -5,10 +5,15 @@ const HASH_BYTES = 32;
 
 export function normalizePhone(value: unknown) {
   let phone = typeof value === "string"
-    ? value.replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 0x6f0)).replace(/[\s().-]/g, "")
+    ? value
+        .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 0x660))
+        .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 0x6f0))
+        .replace(/[\s().\-\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, "")
     : "";
   if (phone.startsWith("00")) phone = `+${phone.slice(2)}`;
-  if (/^07\d{9}$/.test(phone)) phone = `+964${phone.slice(1)}`;
+  if (/^\+96407\d{9}$/.test(phone)) phone = `+964${phone.slice(5)}`;
+  else if (/^96407\d{9}$/.test(phone)) phone = `+964${phone.slice(4)}`;
+  else if (/^07\d{9}$/.test(phone)) phone = `+964${phone.slice(1)}`;
   else if (/^7\d{9}$/.test(phone)) phone = `+964${phone}`;
   else if (/^9647\d{9}$/.test(phone)) phone = `+${phone}`;
   if (!/^\+?[1-9]\d{7,14}$/.test(phone)) throw new Error("رقم هاتف غير صالح");
@@ -53,6 +58,44 @@ export function constantTimeEqual(a: Uint8Array, b: Uint8Array) {
   let result = 0;
   for (let index = 0; index < a.length; index += 1) result |= a[index] ^ b[index];
   return result === 0;
+}
+
+async function importPinCipherKey(secret: string) {
+  const clean = typeof secret === "string" ? secret.trim() : "";
+  if (!clean) throw new Error("PIN_CIPHER_KEY_MISSING");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`alasas-pin-aes-gcm-v1:${clean}`));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+export async function encryptPin(pin: string, secret: string, memberId: string) {
+  if (!isPin(pin)) throw new Error("PIN_INVALID");
+  const key = await importPinCipherKey(secret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aad = new TextEncoder().encode(`member:${memberId}`);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    key,
+    new TextEncoder().encode(pin),
+  );
+  return `v1:${bytesToBase64(iv)}:${bytesToBase64(new Uint8Array(ciphertext))}`;
+}
+
+export async function decryptPin(envelope: string, secret: string, memberId: string) {
+  if (typeof envelope !== "string" || !envelope.startsWith("v1:")) throw new Error("PIN_CIPHER_INVALID");
+  const parts = envelope.split(":");
+  if (parts.length !== 3 || !parts[1] || !parts[2]) throw new Error("PIN_CIPHER_INVALID");
+  const key = await importPinCipherKey(secret);
+  const iv = base64ToBytes(parts[1]);
+  const ciphertext = base64ToBytes(parts[2]);
+  const aad = new TextEncoder().encode(`member:${memberId}`);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    key,
+    ciphertext,
+  );
+  const decoded = new TextDecoder().decode(plaintext);
+  if (!isPin(decoded)) throw new Error("PIN_CIPHER_INVALID");
+  return decoded;
 }
 
 export { PBKDF2_ITERATIONS };

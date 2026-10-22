@@ -4,12 +4,16 @@ import { createPortal } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   Activity,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Check,
   ChevronLeft,
   Copy,
   Dumbbell,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   Folder,
   Home,
@@ -19,6 +23,7 @@ import {
   Plus,
   Printer,
   QrCode,
+  RotateCcw,
   Search,
   Settings,
   Trash2,
@@ -48,6 +53,7 @@ import {
   type SyncPayload,
   watchAdminData,
   watchPublicExercise,
+  watchPublicCourse,
   writeAdminData,
   saveManagerPrintSettings,
   deleteAdminMember,
@@ -56,10 +62,14 @@ import {
 } from "./dataSync";
 import {
   issueMemberPin,
+  revealMemberPin,
+  fetchPinAuditLogs,
+  fetchMemberSession,
   loginMemberWithPin,
   revokeMemberSession,
   revokeMemberAccess,
   pinServiceConfigured,
+  type PinAuditLogEntry,
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
@@ -70,18 +80,67 @@ import { mergeExerciseLibrary } from "./exerciseLibrary";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
 import "./styles.css";
 
+const MEMBER_SESSION_STORAGE_KEY = "alasas-member-session-token";
+
 function MemberPinGate(){
   const [member,setMember]=useState<Member|null>(null);
-  const [sessionToken,setSessionToken]=useState('');
+  const [sessionToken,setSessionToken]=useState(()=> {
+    try { return sessionStorage.getItem(MEMBER_SESSION_STORAGE_KEY) || ''; } catch { return ''; }
+  });
+  const [restoring,setRestoring]=useState(()=> {
+    try { return Boolean(sessionStorage.getItem(MEMBER_SESSION_STORAGE_KEY)); } catch { return false; }
+  });
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [phone,setPhone]=useState('');
   const [pin,setPin]=useState('');
-  const signOut=async()=>{const token=sessionToken;setSessionToken('');setMember(null);try{await revokeMemberSession(token)}catch{}}
+  const [showPin,setShowPin]=useState(false);
+  const submittingRef=useRef(false);
+
+  useEffect(()=>{
+    const savedToken = (() => { try { return sessionStorage.getItem(MEMBER_SESSION_STORAGE_KEY) || ''; } catch { return ''; } })();
+    if (!savedToken) { setRestoring(false); return; }
+    let active = true;
+    setRestoring(true);
+    void fetchMemberSession(savedToken)
+      .then((profile) => {
+        if (!active) return;
+        const normalized = normalizeMember(profile) || (profile as unknown as Member);
+        setMember(normalized);
+        setSessionToken(savedToken);
+      })
+      .catch(() => {
+        if (!active) return;
+        try { sessionStorage.removeItem(MEMBER_SESSION_STORAGE_KEY); } catch {}
+        setSessionToken('');
+        setMember(null);
+        setError('انتهت صلاحية الجلسة السابقة، يرجى تسجيل الدخول مجدداً.');
+      })
+      .finally(() => {
+        if (active) setRestoring(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const signOut=async()=>{
+    const token=sessionToken;
+    try { sessionStorage.removeItem(MEMBER_SESSION_STORAGE_KEY); } catch {}
+    setSessionToken('');
+    setMember(null);
+    setPin('');
+    setError('');
+    try{await revokeMemberSession(token)}catch{}
+  };
   if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;
-  if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||pin.length!==4||!phone.trim())return;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken)}else if(result.member&&result.sessionToken){setMember(result.member as Member);setSessionToken(result.sessionToken)}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><input id="member-pin" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,4))}/><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
+  if(restoring)return <AuthNotice title="جارٍ استعادة جلسة المشترك" text="يتم التحقق من صلاحية الجلسة وتحميل كورسك التدريبي..." />;
+  if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||submittingRef.current||pin.length!==4||!phone.trim())return;submittingRef.current=true;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.customToken)}catch{}}else if(result.member&&result.sessionToken){const normalized=normalizeMember(result.member)||(result.member as Member);setMember(normalized);setSessionToken(result.sessionToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.sessionToken)}catch{}}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{submittingRef.current=false;setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><div className="pin-input-wrap"><input id="member-pin" type={showPin ? "text" : "password"} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x6f0)).replace(/\D/g,'').slice(0,4))}/><button type="button" className="icon-btn pin-visibility-btn" aria-label={showPin ? "إخفاء الرمز" : "إظهار الرمز"} onClick={()=>setShowPin(v=>!v)}>{showPin ? <Eye size={17}/> : <EyeOff size={17}/>}</button></div><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
   return <MemberPortal s={defaults} member={member} onSignOut={signOut}/>;
 }
+type CategoryItem = {
+  id: string;
+  name: string;
+  image?: string;
+};
 type Exercise = {
   id: string;
   name: string;
@@ -91,8 +150,10 @@ type Exercise = {
   reps: string;
   rest: string;
   video?: string;
+  description?: string;
+  image?: string;
 };
-type MemberExercise = Exercise & { weight?: string };
+type MemberExercise = Exercise & { weight?: string; notes?: string };
 type DayPlan = MemberExercise[];
 type Member = {
   id: string;
@@ -101,6 +162,9 @@ type Member = {
   height: string;
   weight: string;
   createdAt: string;
+  expiresAt?: string;
+  courseName?: string;
+  notes?: string;
   photo?: string;
   days: DayPlan[];
   active?: boolean;
@@ -111,8 +175,10 @@ type Member = {
   phoneDisplay?: string;
   /** Server CAS metadata; never compared as user-entered member data. */
   version?: number;
+  /** Transient field for initial/reset PIN during member wizard save; never persisted to RTDB. */
+  customPin?: string;
 };
-type ReadyCourse = { id: string; name: string; days: DayPlan[] };
+type ReadyCourse = { id: string; name: string; notes?: string; days: DayPlan[] };
 type SettingsData = {
   coachName: string;
   gymName: string;
@@ -366,15 +432,23 @@ const cloneDays = (days: unknown): DayPlan[] =>
     Array.isArray(day)
       ? day
           .filter((exercise): exercise is Record<string, unknown> => Boolean(exercise && typeof exercise === "object"))
-          .map((exercise) => ({
-            ...exercise,
-            id: String(exercise.id ?? uid()),
-            name: String(exercise.name ?? "تمرين بدون اسم"),
-            muscle: normalizeMuscle(exercise.muscle),
-            sets: typeof exercise.sets === "number" || typeof exercise.sets === "string" ? exercise.sets : 0,
-            reps: String(exercise.reps ?? "—"),
-            rest: String(exercise.rest ?? "—"),
-          } as MemberExercise))
+          .map((exercise) => {
+            const item: MemberExercise = {
+              id: String(exercise.id ?? uid()),
+              name: String(exercise.name ?? "تمرين بدون اسم"),
+              muscle: normalizeMuscle(exercise.muscle),
+              sets: typeof exercise.sets === "number" || typeof exercise.sets === "string" ? exercise.sets : 0,
+              reps: String(exercise.reps ?? "—"),
+              rest: String(exercise.rest ?? "—"),
+            };
+            if (typeof exercise.english === "string" && exercise.english) item.english = exercise.english;
+            if (typeof exercise.video === "string" && exercise.video) item.video = exercise.video;
+            if (typeof exercise.description === "string" && exercise.description) item.description = exercise.description;
+            if (typeof exercise.image === "string" && exercise.image) item.image = exercise.image;
+            if (typeof exercise.weight === "string" && exercise.weight) item.weight = exercise.weight;
+            if (typeof exercise.notes === "string" && exercise.notes) item.notes = exercise.notes;
+            return item;
+          })
       : [],
   );
 function normalizeMember(value: unknown): Member | null {
@@ -400,6 +474,9 @@ function normalizeMember(value: unknown): Member | null {
     height: String(raw.height ?? ""),
     weight: String(raw.weight ?? ""),
     createdAt: String(raw.createdAt ?? "—"),
+    expiresAt: typeof raw.expiresAt === "string" && raw.expiresAt.trim() ? raw.expiresAt.trim() : undefined,
+    courseName: typeof raw.courseName === "string" && raw.courseName.trim() ? raw.courseName.trim() : undefined,
+    notes: typeof raw.notes === "string" && raw.notes.trim() ? raw.notes.trim() : undefined,
     // Member photos are intentionally unsupported in this release.
     photo: "",
     days: cloneDays(raw.days),
@@ -426,6 +503,9 @@ function memberPersistenceProjection(value: unknown) {
     height: member.height,
     weight: member.weight,
     createdAt: member.createdAt,
+    ...(member.expiresAt ? { expiresAt: member.expiresAt } : {}),
+    ...(member.courseName ? { courseName: member.courseName } : {}),
+    ...(member.notes ? { notes: member.notes } : {}),
     phoneE164: member.phoneE164 || "",
     phoneDisplay: member.phoneDisplay || "",
     photo: "",
@@ -479,14 +559,43 @@ function cleanMemberName(value: unknown) {
     throw new Error("اسم المشترك إلزامي ويجب أن يحتوي على حروف، وليس رقماً فقط");
   return name;
 }
+const defaultCategories: CategoryItem[] = muscles.map((name, index) => ({
+  id: `cat-${index + 1}`,
+  name,
+}));
+
+function normalizeCategories(value: unknown): CategoryItem[] {
+  const items = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? Object.values(value as Record<string, unknown>)
+      : [];
+  const parsed = dedupeById<CategoryItem>(
+    items
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item, idx) => ({
+        id: String(item.id || `cat-${idx + 1}`),
+        name: String(item.name || "").trim(),
+        ...(typeof item.image === "string" && item.image.trim() ? { image: item.image.trim() } : {}),
+      }))
+      .filter((item) => item.name),
+  );
+  return parsed.length ? parsed : defaultCategories;
+}
+
 function normalizeCourses(value: unknown): ReadyCourse[] {
-  const items = Array.isArray(value) ? value : [];
+  const items = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? Object.values(value as Record<string, unknown>)
+      : [];
   return dedupeById(
     items
       .filter((course): course is Record<string, unknown> => Boolean(course && typeof course === "object"))
       .map((course) => ({
         id: String(course.id ?? ""),
         name: String(course.name ?? "كورس بدون اسم"),
+        ...(typeof course.notes === "string" && course.notes.trim() ? { notes: course.notes.trim() } : {}),
         days: cloneDays(course.days),
       }))
       .filter((course) => course.id),
@@ -634,7 +743,21 @@ function Sidebar({
     </aside>
   );
 }
-function Topbar({ title, onMenu, menuOpen }: { title: string; onMenu: () => void; menuOpen: boolean }) {
+function Topbar({
+  title,
+  onMenu,
+  menuOpen,
+  searchQuery,
+  onSearchChange,
+  onSearchNavigate,
+}: {
+  title: string;
+  onMenu: () => void;
+  menuOpen: boolean;
+  searchQuery: string;
+  onSearchChange: (q: string) => void;
+  onSearchNavigate: (q: string) => void;
+}) {
   return (
     <header className="topbar">
       <button className="icon-btn mobile-menu" type="button" aria-label={menuOpen ? "إغلاق قائمة الإدارة" : "فتح قائمة الإدارة"} aria-expanded={menuOpen} aria-controls="admin-mobile-drawer" onClick={onMenu}>
@@ -645,21 +768,39 @@ function Topbar({ title, onMenu, menuOpen }: { title: string; onMenu: () => void
         <h1>{title}</h1>
       </div>
       <div className="top-actions">
-        <div className="search-top">
+        <form
+          className="search-top"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (searchQuery.trim()) onSearchNavigate(searchQuery.trim());
+          }}
+        >
           <Search size={16} />
-          <span>البحث في المشتركين أو التمارين...</span>
-        </div>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="البحث في المشتركين أو التمارين..."
+            aria-label="البحث في المشتركين أو التمارين"
+          />
+          {searchQuery && (
+            <button type="button" className="icon-btn search-clear-btn" aria-label="مسح البحث" onClick={() => onSearchChange("")}>
+              <X size={14} />
+            </button>
+          )}
+        </form>
         <Activity size={18} />
       </div>
     </header>
   );
 }
-type AppPayload = SyncPayload<SettingsData, Exercise, Member, ReadyCourse>;
+type AppPayload = SyncPayload<SettingsData, Exercise, Member, ReadyCourse, CategoryItem>;
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.keys(value as Record<string, unknown>)
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
       .join(",")}}`;
@@ -672,20 +813,24 @@ function CentralDataBridge({
   exercises,
   members,
   courses,
+  categories,
   setSettings,
   setExercises,
   setMembers,
   setCourses,
+  setCategories,
 }: {
   role: AdminRecord["role"];
   settings: SettingsData;
   exercises: Exercise[];
   members: Member[];
   courses: ReadyCourse[];
+  categories: CategoryItem[];
   setSettings: React.Dispatch<React.SetStateAction<SettingsData>>;
   setExercises: React.Dispatch<React.SetStateAction<Exercise[]>>;
   setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
   setCourses: React.Dispatch<React.SetStateAction<ReadyCourse[]>>;
+  setCategories: React.Dispatch<React.SetStateAction<CategoryItem[]>>;
 }) {
   const [remotePresent, setRemotePresent] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
@@ -700,6 +845,7 @@ function CentralDataBridge({
     exercises,
     members,
     courses,
+    categories,
   };
   const imageSource = (value: string, fallback = "") =>
     safeImageUrl(value) || (value.startsWith("/") ? value : fallback);
@@ -724,11 +870,12 @@ function CentralDataBridge({
           );
           setMembers(normalizeMembers(remote.members));
           setCourses(normalizeCourses(remote.courses));
+          if (remote.categories) setCategories(normalizeCategories(remote.categories));
           setRemotePresent(true);
         }
         setRemoteReady(true);
       }),
-    [setSettings, setExercises, setMembers, setCourses],
+    [setSettings, setExercises, setMembers, setCourses, setCategories],
   );
   useEffect(() => {
     const save = async (requestedPayload: AppPayload = payload): Promise<boolean> => {
@@ -904,12 +1051,31 @@ function CentralDataBridge({
     };
     const saveSettings = () => void save();
     const saveExercises = (event: Event) => {
-      const exercises = (event as CustomEvent<{ exercises?: Exercise[] }>).detail?.exercises;
-      if (!Array.isArray(exercises)) return;
-      // Managers may curate exercises but cannot write settings. Send exactly
-      // the user-approved merged library; writeAdminData performs targeted
-      // idempotent RTDB/publicExercises updates and verifies the readback.
-      void save({ ...payload, exercises });
+      const detail = (event as CustomEvent<{ exercises?: Exercise[]; categories?: CategoryItem[]; courses?: ReadyCourse[]; members?: Member[] }>).detail;
+      if (!detail || !Array.isArray(detail.exercises)) return;
+      void save({
+        ...payload,
+        exercises: detail.exercises,
+        ...(Array.isArray(detail.categories) ? { categories: detail.categories } : {}),
+        ...(Array.isArray(detail.courses) ? { courses: detail.courses } : {}),
+        ...(Array.isArray(detail.members) ? { members: detail.members } : {}),
+      });
+    };
+    const saveCourses = (event: Event) => {
+      const nextCourses = (event as CustomEvent<{ courses?: ReadyCourse[] }>).detail?.courses;
+      if (!Array.isArray(nextCourses)) return;
+      void save({ ...payload, courses: nextCourses });
+    };
+    const saveCategories = (event: Event) => {
+      const detail = (event as CustomEvent<{ categories?: CategoryItem[]; exercises?: Exercise[]; courses?: ReadyCourse[]; members?: Member[] }>).detail;
+      if (!detail || !Array.isArray(detail.categories)) return;
+      void save({
+        ...payload,
+        categories: detail.categories,
+        ...(Array.isArray(detail.exercises) ? { exercises: detail.exercises } : {}),
+        ...(Array.isArray(detail.courses) ? { courses: detail.courses } : {}),
+        ...(Array.isArray(detail.members) ? { members: detail.members } : {}),
+      });
     };
     const deleteMember = (event: Event) => {
       const detail = (event as CustomEvent<{ memberId: string; resolve: (ok: boolean) => void }>).detail;
@@ -937,11 +1103,15 @@ function CentralDataBridge({
     };
     window.addEventListener("alasas-save-settings", saveSettings);
     window.addEventListener("alasas-save-exercises", saveExercises);
+    window.addEventListener("alasas-save-courses", saveCourses);
+    window.addEventListener("alasas-save-categories", saveCategories);
     window.addEventListener("alasas-save-member", saveMember);
     window.addEventListener("alasas-delete-member", deleteMember);
     return () => {
       window.removeEventListener("alasas-save-settings", saveSettings);
       window.removeEventListener("alasas-save-exercises", saveExercises);
+      window.removeEventListener("alasas-save-courses", saveCourses);
+      window.removeEventListener("alasas-save-categories", saveCategories);
       window.removeEventListener("alasas-save-member", saveMember);
       window.removeEventListener("alasas-delete-member", deleteMember);
     };
@@ -1003,10 +1173,23 @@ function App({
   const [courses, setCourses] = useState(() =>
     normalizeCourses(read<unknown>("alasas-courses", [])),
   );
+  const [categories, setCategories] = useState<CategoryItem[]>(() =>
+    normalizeCategories(read<unknown>("alasas-categories", defaultCategories)),
+  );
   const [page, setPage] = useState<Page>("home");
   const [open, setOpen] = useState(false);
-  const exerciseId = location.hash.startsWith("#/exercise/")
-    ? decodeURIComponent(location.hash.slice(11))
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [currentHash, setCurrentHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setCurrentHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const exerciseId = currentHash.startsWith("#/exercise/")
+    ? decodeURIComponent(currentHash.slice(11))
+    : "";
+  const courseId = currentHash.startsWith("#/course/")
+    ? decodeURIComponent(currentHash.slice(9))
     : "";
   useEffect(
     () => localStorage.setItem("alasas-settings", JSON.stringify(settings)),
@@ -1020,6 +1203,11 @@ function App({
     () => localStorage.setItem("alasas-courses", JSON.stringify(courses)),
     [courses],
   );
+  useEffect(
+    () => localStorage.setItem("alasas-categories", JSON.stringify(categories)),
+    [categories],
+  );
+  const muscleNames = categories.length ? categories.map((c) => c.name) : muscles;
   const title = {
     home: "الرئيسية",
     categories: "الأقسام",
@@ -1038,8 +1226,15 @@ function App({
         <PublicExerciseDetail
           exerciseId={exerciseId}
           fallback={
-            adminRoute ? exercises.find((e) => e.id === exerciseId) : undefined
+            exercises.find((e) => e.id === exerciseId) ||
+            seedExercises.find((e) => e.id === exerciseId) ||
+            suggestedExercises.find((e) => e.id === exerciseId)
           }
+        />
+      ) : courseId ? (
+        <PublicCourseDetail
+          courseId={courseId}
+          fallback={courses.find((c) => c.id === courseId)}
         />
       ) : (
         <>
@@ -1053,7 +1248,22 @@ function App({
             document.body
           )}
           <div className="main-area">
-            <Topbar title={title} menuOpen={open} onMenu={() => setOpen((current) => !current)} />
+            <Topbar
+              title={title}
+              menuOpen={open}
+              onMenu={() => setOpen((current) => !current)}
+              searchQuery={globalSearch}
+              onSearchChange={(q) => {
+                setGlobalSearch(q);
+                if (q.trim() && page === "home") setPage("members");
+              }}
+              onSearchNavigate={(q) => {
+                const matchExercise = exercises.some((e) => `${e.name} ${e.english || ""}`.toLowerCase().includes(q.toLowerCase()));
+                const matchMember = members.some((m) => `${m.name} ${m.membershipId || ""} ${m.phoneDisplay || ""}`.toLowerCase().includes(q.toLowerCase()));
+                if (matchMember || !matchExercise) setPage("members");
+                else setPage("barcodes");
+              }}
+            />
             <main className="content">
               <CentralDataBridge
                 role={role}
@@ -1061,29 +1271,48 @@ function App({
                 exercises={exercises}
                 members={members}
                 courses={courses}
+                categories={categories}
                 setSettings={setSettings}
                 setExercises={setExercises}
                 setMembers={setMembers}
                 setCourses={setCourses}
+                setCategories={setCategories}
               />
               {page === "home" && (
                 <Dashboard
                   members={members}
                   exercises={exercises}
+                  courses={courses}
                   onAdd={() => setPage("members")}
                 />
               )}{" "}
               {page === "categories" && (
-                <Categories exercises={exercises} setExercises={setExercises} />
+                <Categories
+                  exercises={exercises}
+                  setExercises={setExercises}
+                  categories={categories}
+                  setCategories={setCategories}
+                  courses={courses}
+                  setCourses={setCourses}
+                  members={members}
+                  setMembers={setMembers}
+                />
               )}{" "}
               {page === "barcodes" && (
-                <Barcodes exercises={exercises} setExercises={setExercises} />
+                <Barcodes
+                  exercises={exercises}
+                  setExercises={setExercises}
+                  courses={courses}
+                  muscleList={muscleNames}
+                  initialQuery={globalSearch}
+                />
               )}{" "}
               {page === "courses" && (
                 <Courses
                   exercises={exercises}
                   courses={courses}
                   setCourses={setCourses}
+                  muscleList={muscleNames}
                 />
               )}{" "}
               {page === "members" && (
@@ -1093,6 +1322,8 @@ function App({
                   courses={courses}
                   setMembers={setMembers}
                   settings={settings}
+                  muscleList={muscleNames}
+                  initialSearch={globalSearch}
                 />
               )}{" "}
               {page === "settings" && (
@@ -1221,27 +1452,105 @@ function AdminGate() {
 }
 function MemberGate() { return <MemberPinGate />; }
 function Stat({label,value,icon:Icon}:{label:string;value:string;icon:typeof Users}){return <div className="stat-card"><div className="stat-icon"><Icon size={18}/></div><div><span>{label}</span><strong>{value}</strong><small>من البيانات الحالية</small></div></div>}
-function Dashboard({members,exercises,onAdd}:{members:Member[];exercises:Exercise[];onAdd:()=>void}){return <><section className="welcome-row"><div><h2>مرحباً بك في لوحة الإدارة</h2><p>أنشئ خططاً واضحة، وخصصها لكل مشترك من مكان واحد.</p></div><Button onClick={onAdd} icon={<Plus size={17}/>}>إضافة مشترك</Button></section><section className="stats-grid"><Stat label="المشتركون" value={String(members.length)} icon={Users}/><Stat label="المشتركون النشطون" value={String(members.length)} icon={Activity}/><Stat label="الكورسات المنشأة" value="—" icon={FileText}/><Stat label="تمارين المكتبة" value={String(exercises.length)} icon={Dumbbell}/></section><div className="dashboard-grid"><section className="panel table-panel"><div className="panel-head"><div><h2>آخر المشتركين</h2><p>البيانات المحفوظة على هذا الجهاز</p></div></div>{members.length?<table><thead><tr><th>الاسم</th><th>الطول</th><th>الوزن</th><th>الأيام</th></tr></thead><tbody>{members.slice(-5).reverse().map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length} أيام</td></tr>)}</tbody></table>:<div className="empty-with-action"><Empty icon={<Users size={28}/>} title="لا يوجد مشتركون بعد" text="ابدأ بإضافة أول مشترك لبناء كورسه."/><Button onClick={onAdd} icon={<Plus size={16}/>}>إضافة أول مشترك</Button></div>}</section><section className="panel quick-panel"><h2>مسار سريع</h2><p>خطوات إنشاء كورس مخصص</p><div className="steps"><span><b>1</b>أضف بيانات المشترك</span><span><b>2</b>حدد أيام التدريب</span><span><b>3</b>اختر العضلات والتمارين</span><span><b>4</b>راجع واطبع الكورس</span></div><Button onClick={onAdd} icon={<Plus size={16}/>}>بدء إنشاء كورس</Button></section></div></>}
+function Dashboard({members,exercises,courses,onAdd}:{members:Member[];exercises:Exercise[];courses:ReadyCourse[];onAdd:()=>void}){
+  const [auditLogs, setAuditLogs] = useState<PinAuditLogEntry[]>([]);
+  useEffect(() => {
+    let active = true;
+    if (pinServiceConfigured) {
+      void fetchPinAuditLogs().then((logs) => { if (active) setAuditLogs(logs.slice(0, 8)); }).catch(() => undefined);
+    }
+    return () => { active = false; };
+  }, [members]);
+  const activeMembersCount = members.filter((m) => m.active !== false).length;
+  const totalCoursesCount = courses.length + members.filter((m) => m.days.some((d) => d.length > 0)).length;
+  const auditActionLabel = (action: string) => {
+    if (action === "PIN_ISSUED") return "إصدار رمز PIN";
+    if (action === "PIN_REVEALED") return "كشف رمز PIN للكابتن";
+    if (action === "PIN_RESET") return "إعادة تعيين رمز PIN";
+    if (action === "PIN_REVOKED") return "إبطال وصول المشترك";
+    return action;
+  };
+  return <>
+    <section className="welcome-row"><div><h2>مرحباً بك في لوحة الإدارة</h2><p>أنشئ خططاً واضحة، وخصصها لكل مشترك من مكان واحد.</p></div><Button onClick={onAdd} icon={<Plus size={17}/>}>إضافة مشترك</Button></section>
+    <section className="stats-grid">
+      <Stat label="المشتركون" value={String(members.length)} icon={Users}/>
+      <Stat label="المشتركون النشطون" value={String(activeMembersCount)} icon={Activity}/>
+      <Stat label="الكورسات المنشأة" value={String(totalCoursesCount)} icon={FileText}/>
+      <Stat label="تمارين المكتبة" value={String(exercises.length)} icon={Dumbbell}/>
+    </section>
+    <div className="dashboard-grid">
+      <section className="panel table-panel">
+        <div className="panel-head"><div><h2>آخر المشتركين</h2><p>البيانات المحفوظة في Firebase RTDB</p></div></div>
+        {members.length?<table><thead><tr><th>الاسم</th><th>الحالة</th><th>الطول</th><th>الوزن</th><th>الأيام</th></tr></thead><tbody>{members.slice(0,5).map(m=><tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0,1)}</div><b>{m.name}</b></div></td><td><span className="availability-badge">{m.active === false ? "غير نشط" : "نشط"}</span></td><td>{m.height||'—'} سم</td><td>{m.weight||'—'} كغم</td><td>{m.days.length} أيام</td></tr>)}</tbody></table>:<div className="empty-with-action"><Empty icon={<Users size={28}/>} title="لا يوجد مشتركون بعد" text="ابدأ بإضافة أول مشترك لبناء كورسه."/><Button onClick={onAdd} icon={<Plus size={16}/>}>إضافة أول مشترك</Button></div>}
+      </section>
+      <section className="panel quick-panel">
+        <h2>مسار سريع</h2>
+        <p>خطوات إنشاء كورس مخصص</p>
+        <div className="steps"><span><b>1</b>أضف بيانات المشترك</span><span><b>2</b>حدد أيام التدريب</span><span><b>3</b>اختر العضلات والتمارين</span><span><b>4</b>راجع واطبع الكورس</span></div>
+        <Button onClick={onAdd} icon={<Plus size={16}/>}>بدء إنشاء كورس</Button>
+        {auditLogs.length > 0 && (
+          <div className="audit-mini-box" aria-label="سجل عمليات PIN الأخيرة">
+            <h3>سجل عمليات الأمان وPIN</h3>
+            <ul>
+              {auditLogs.slice(0, 5).map((log) => {
+                const targetMember = members.find((m) => m.id === log.memberId);
+                return (
+                  <li key={log.id}>
+                    <b>{auditActionLabel(log.action)}</b>
+                    <span>{targetMember?.name || log.memberId}</span>
+                    <small dir="ltr">{new Date(log.createdAt).toLocaleTimeString("ar-IQ", { hour: "2-digit", minute: "2-digit" })}</small>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </section>
+    </div>
+  </>;
+}
 function Categories({
   exercises,
   setExercises,
+  categories,
+  setCategories,
+  courses,
+  setCourses,
+  members,
+  setMembers,
 }: {
   exercises: Exercise[];
   setExercises: React.Dispatch<React.SetStateAction<Exercise[]>>;
+  categories: CategoryItem[];
+  setCategories: React.Dispatch<React.SetStateAction<CategoryItem[]>>;
+  courses: ReadyCourse[];
+  setCourses: React.Dispatch<React.SetStateAction<ReadyCourse[]>>;
+  members: Member[];
+  setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
 }) {
-  const [muscle, setMuscle] = useState(muscles[0]);
+  const muscleNames = categories.length ? categories.map((c) => c.name) : muscles;
+  const [muscle, setMuscle] = useState(muscleNames[0] || muscles[0]);
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
+  const [categoryNameInput, setCategoryNameInput] = useState("");
+  const [categoryImageInput, setCategoryImageInput] = useState("");
+  const [categoryError, setCategoryError] = useState("");
   const [importMessage, setImportMessage] = useState("");
+  useEffect(() => {
+    if (!muscleNames.includes(muscle) && muscleNames[0]) setMuscle(muscleNames[0]);
+  }, [muscleNames, muscle]);
   useEffect(() => {
     const report = (event: Event) => {
       const detail = String((event as CustomEvent<string>).detail);
-      if (detail === "saved") setImportMessage("تم حفظ المكتبة العربية وتأكيد قراءتها من Firebase RTDB.");
+      if (detail === "saved") setImportMessage("تم حفظ التحديثات وتأكيد قراءتها من Firebase RTDB.");
       else if (detail !== "saving" && detail) setImportMessage(detail);
     };
     window.addEventListener("alasas-save-status", report);
     return () => window.removeEventListener("alasas-save-status", report);
   }, []);
+  const currentCategory = categories.find((c) => c.name === muscle);
   const list = exercises.filter((e) => e.muscle === muscle);
   const importSuggestions = () => {
     setExercises((current) => {
@@ -1254,62 +1563,196 @@ function Categories({
     });
   };
   const save = (e: Exercise) => {
-    setExercises((x) =>
-      x.some((a) => a.id === e.id)
-        ? x.map((a) => (a.id === e.id ? e : a))
-        : [...x, e],
-    );
+    const nextExercises = exercises.some((a) => a.id === e.id)
+      ? exercises.map((a) => (a.id === e.id ? e : a))
+      : [...exercises, e];
+    setExercises(nextExercises);
+    setImportMessage("جارٍ حفظ التمرين في Firebase RTDB…");
+    window.dispatchEvent(new CustomEvent("alasas-save-exercises", { detail: { exercises: nextExercises } }));
     setShow(false);
+  };
+  const removeExercise = (id: string) => {
+    if (!window.confirm("حذف هذا التمرين من المكتبة؟")) return;
+    const nextExercises = exercises.filter((a) => a.id !== id);
+    setExercises(nextExercises);
+    setImportMessage("جارٍ حذف التمرين وتحديث Firebase RTDB…");
+    window.dispatchEvent(new CustomEvent("alasas-save-exercises", { detail: { exercises: nextExercises } }));
+  };
+  const openAddCategory = () => {
+    setEditingCategory(null);
+    setCategoryNameInput("");
+    setCategoryImageInput("");
+    setCategoryError("");
+    setShowCategoryModal(true);
+  };
+  const openEditCategory = (cat: CategoryItem) => {
+    setEditingCategory(cat);
+    setCategoryNameInput(cat.name);
+    setCategoryImageInput(cat.image || "");
+    setCategoryError("");
+    setShowCategoryModal(true);
+  };
+  const saveCategory = () => {
+    const trimmed = categoryNameInput.trim();
+    if (!trimmed) {
+      setCategoryError("اسم القسم العضلي مطلوب");
+      return;
+    }
+    const trimmedImage = categoryImageInput.trim();
+    if (trimmedImage && !safeImageUrl(trimmedImage) && !trimmedImage.startsWith("/")) {
+      setCategoryError("رابط صورة القسم يجب أن يبدأ بـ HTTPS أو /assets/");
+      return;
+    }
+    if (categories.some((c) => c.name === trimmed && c.id !== editingCategory?.id)) {
+      setCategoryError("يوجد قسم عضلي بهذا الاسم بالفعل");
+      return;
+    }
+    let nextCategories: CategoryItem[];
+    let nextExercises = exercises;
+    let nextCourses = courses;
+    let nextMembers = members;
+    if (editingCategory) {
+      const oldName = editingCategory.name;
+      nextCategories = categories.map((c) =>
+        c.id === editingCategory.id
+          ? { id: c.id, name: trimmed, ...(trimmedImage ? { image: trimmedImage } : {}) }
+          : c,
+      );
+      if (oldName !== trimmed) {
+        nextExercises = exercises.map((ex) => (ex.muscle === oldName ? { ...ex, muscle: trimmed } : ex));
+        nextCourses = courses.map((course) => ({
+          ...course,
+          days: course.days.map((day) => day.map((ex) => (ex.muscle === oldName ? { ...ex, muscle: trimmed } : ex))),
+        }));
+        nextMembers = members.map((member) => ({
+          ...member,
+          days: member.days.map((day) => day.map((ex) => (ex.muscle === oldName ? { ...ex, muscle: trimmed } : ex))),
+        }));
+        setExercises(nextExercises);
+        setCourses(nextCourses);
+        setMembers(nextMembers);
+      }
+    } else {
+      nextCategories = [
+        ...categories,
+        { id: `cat-${uid()}`, name: trimmed, ...(trimmedImage ? { image: trimmedImage } : {}) },
+      ];
+    }
+    setCategories(nextCategories);
+    setMuscle(trimmed);
+    setShowCategoryModal(false);
+    setImportMessage("جارٍ حفظ الأقسام العضلية في Firebase RTDB…");
+    window.dispatchEvent(
+      new CustomEvent("alasas-save-categories", {
+        detail: { categories: nextCategories, exercises: nextExercises, courses: nextCourses, members: nextMembers },
+      }),
+    );
+  };
+  const moveCategory = (index: number, direction: -1 | 1) => {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= categories.length) return;
+    const nextCategories = [...categories];
+    const [moved] = nextCategories.splice(index, 1);
+    nextCategories.splice(targetIndex, 0, moved);
+    setCategories(nextCategories);
+    window.dispatchEvent(new CustomEvent("alasas-save-categories", { detail: { categories: nextCategories } }));
+  };
+  const deleteCategory = (cat: CategoryItem) => {
+    const attached = exercises.filter((e) => e.muscle === cat.name);
+    if (categories.length <= 1) {
+      window.alert("لا يمكن حذف القسم الوحيد المتبقي.");
+      return;
+    }
+    const fallbackCategory = categories.find((c) => c.id !== cat.id)?.name || muscles[0];
+    const confirmMsg = attached.length
+      ? `يحتوي قسم "${cat.name}" على ${attached.length} تمارين. عند الحذف سيتم نقل التمارين تلقائياً إلى "${fallbackCategory}" لمنع فقدان ارتباطاتها. هل تريد المتابعة؟`
+      : `هل تريد حذف قسم "${cat.name}"؟`;
+    if (!window.confirm(confirmMsg)) return;
+    const nextCategories = categories.filter((c) => c.id !== cat.id);
+    const nextExercises = attached.length
+      ? exercises.map((ex) => (ex.muscle === cat.name ? { ...ex, muscle: fallbackCategory } : ex))
+      : exercises;
+    setCategories(nextCategories);
+    if (attached.length) setExercises(nextExercises);
+    if (muscle === cat.name) setMuscle(fallbackCategory);
+    window.dispatchEvent(
+      new CustomEvent("alasas-save-categories", {
+        detail: { categories: nextCategories, exercises: nextExercises },
+      }),
+    );
   };
   return (
     <>
       <section className="section-heading">
         <div>
-          <h2>مكتبة التمارين</h2>
-          <p>المصدر الموحد للتمارين المستخدمة في الكورسات والباركودات.</p>
+          <h2>الأقسام ومكتبة التمارين</h2>
+          <p>المصدر الموحد للأقسام العضلية والتمارين المستخدمة في الكورسات والباركودات.</p>
         </div>
-        <div className="exercise-library-actions"><Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة/استكمال المكتبة العربية</Button><Button
-          onClick={() => {
-            setEditing(null);
-            setShow(true);
-          }}
-          icon={<Plus size={17} />}
-        >
-          إضافة تمرين
-        </Button></div>
+        <div className="exercise-library-actions">
+          <Button secondary onClick={openAddCategory} icon={<Folder size={16} />}>إضافة قسم عضلي</Button>
+          <Button secondary onClick={importSuggestions} icon={<Plus size={16} />}>إضافة/استكمال المكتبة العربية</Button>
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setShow(true);
+            }}
+            icon={<Plus size={17} />}
+          >
+            إضافة تمرين
+          </Button>
+        </div>
       </section>
       {importMessage && <p className="save-status library-import-status" role="status">{importMessage}</p>}
       <div className="library-layout">
         <aside className="muscle-list">
-          <h3>الأقسام</h3>
-          {muscles.map((m) => (
-            <button
-              className={m === muscle ? "selected" : ""}
-              onClick={() => setMuscle(m)}
-              key={m}
-            >
-              {m}
-              <span>{exercises.filter((e) => e.muscle === m).length}</span>
-            </button>
+          <h3>الأقسام ({categories.length})</h3>
+          {categories.map((cat, idx) => (
+            <div key={cat.id} className={`category-row-item ${cat.name === muscle ? "selected" : ""}`}>
+              <button
+                className={cat.name === muscle ? "selected" : ""}
+                onClick={() => setMuscle(cat.name)}
+              >
+                <span className="category-label-wrap">
+                  {cat.image && <img src={cat.image} alt="" className="category-mini-thumb" />}
+                  {cat.name}
+                </span>
+                <span>{exercises.filter((e) => e.muscle === cat.name).length}</span>
+              </button>
+              <div className="category-mini-actions" aria-label={`إدارة ${cat.name}`}>
+                <button type="button" className="icon-btn" title="ترتيب لأعلى" disabled={idx === 0} onClick={() => moveCategory(idx, -1)}><ArrowUp size={13} /></button>
+                <button type="button" className="icon-btn" title="ترتيب لأسفل" disabled={idx === categories.length - 1} onClick={() => moveCategory(idx, 1)}><ArrowDown size={13} /></button>
+                <button type="button" className="icon-btn" title="تعديل القسم" onClick={() => openEditCategory(cat)}><Pencil size={13} /></button>
+                <button type="button" className="icon-btn" title="حذف القسم" onClick={() => deleteCategory(cat)}><Trash2 size={13} /></button>
+              </div>
+            </div>
           ))}
         </aside>
         <section className="panel exercise-panel">
           <div className="panel-head">
-            <div>
-              <h2>{muscle}</h2>
-              <p>{list.length} تمارين محفوظة</p>
+            <div className="category-head-info">
+              {currentCategory?.image && <img src={currentCategory.image} alt={muscle} className="category-banner-thumb" />}
+              <div>
+                <h2>{muscle}</h2>
+                <p>{list.length} تمارين محفوظة</p>
+              </div>
             </div>
+            {currentCategory && (
+              <div className="row-actions">
+                <button type="button" onClick={() => openEditCategory(currentCategory)}><Pencil size={14} /> تعديل القسم</button>
+              </div>
+            )}
           </div>
           {list.length ? (
             <div className="exercise-grid">
               {list.map((e) => (
                 <div className="exercise-card" key={e.id}>
                   <div className="exercise-thumb">
-                    <Dumbbell size={24} />
+                    {e.image ? <img src={e.image} alt={e.name} className="exercise-card-img" /> : <Dumbbell size={24} />}
                   </div>
                   <div className="exercise-card-body">
                     <b>{e.name}</b>
                     <span>{e.english || "اسم إنجليزي غير مضاف"}</span>
+                    {e.description && <p className="exercise-desc-snippet">{e.description}</p>}
                     <small>
                       {e.sets} مجموعات · {e.reps} · راحة {e.rest}
                     </small>
@@ -1323,11 +1766,11 @@ function Categories({
                         <Pencil size={14} />
                         تعديل
                       </button>
-                      <button
-                        onClick={() =>
-                          setExercises((x) => x.filter((a) => a.id !== e.id))
-                        }
-                      >
+                      <a className="button-like-link" href={exerciseUrl(e.id)} target="_blank" rel="noreferrer">
+                        <QrCode size={14} />
+                        QR
+                      </a>
+                      <button onClick={() => removeExercise(e.id)}>
                         <Trash2 size={14} />
                         حذف
                       </button>
@@ -1345,10 +1788,31 @@ function Categories({
           )}
         </section>
       </div>
+      {showCategoryModal && (
+        <Modal title={editingCategory ? "تعديل القسم العضلي" : "إضافة قسم عضلي"} onClose={() => setShowCategoryModal(false)}>
+          <div className="form-grid">
+            <label>
+              اسم القسم العضلي
+              <input value={categoryNameInput} onChange={(e) => { setCategoryError(""); setCategoryNameInput(e.target.value); }} placeholder="مثال: تمارين الصدر" />
+            </label>
+            <label>
+              صورة القسم (رابط HTTPS أو /assets/ اختياري)
+              <input dir="ltr" value={categoryImageInput} onChange={(e) => { setCategoryError(""); setCategoryImageInput(e.target.value); }} placeholder="https://..." />
+            </label>
+          </div>
+          {editingCategory && <small className="save-status">عند تعديل اسم القسم يتم تحديث جميع التمارين والكورسات المرتبطة به تلقائياً دون فقدان أي ارتباط.</small>}
+          {categoryError && <p className="save-error" role="alert">{categoryError}</p>}
+          <div className="modal-actions">
+            <Button secondary onClick={() => setShowCategoryModal(false)}>إلغاء</Button>
+            <Button onClick={saveCategory} icon={<Check size={16} />}>حفظ القسم</Button>
+          </div>
+        </Modal>
+      )}
       {show && (
         <ExerciseModal
           initial={editing}
           muscle={muscle}
+          muscleList={muscleNames}
           onClose={() => setShow(false)}
           onSave={save}
         />
@@ -1359,11 +1823,13 @@ function Categories({
 function ExerciseModal({
   initial,
   muscle,
+  muscleList = muscles,
   onClose,
   onSave,
 }: {
   initial: Exercise | null;
   muscle: string;
+  muscleList?: string[];
   onClose: () => void;
   onSave: (e: Exercise) => void;
 }) {
@@ -1375,13 +1841,16 @@ function ExerciseModal({
       sets: 3,
       reps: "10–12",
       rest: "60 ثانية",
+      description: "",
+      image: "",
     },
   );
   const [error, setError] = useState("");
-  const field = (key: keyof Exercise, label: string) => (
+  const field = (key: keyof Exercise, label: string, placeholder = "") => (
     <label>
       {label}
       <input
+        placeholder={placeholder}
         value={String(e[key] ?? "")}
         onChange={(event) => {
           setError("");
@@ -1395,14 +1864,37 @@ function ExerciseModal({
     </label>
   );
   const save = () => {
+    if (!e.name.trim()) {
+      setError("اسم التمرين بالعربية مطلوب.");
+      return;
+    }
     if (!isSafeVideoUrl(e.video)) {
       setError(
         "يسمح فقط برابط HTTPS من YouTube أو Vimeo بدون مسافات أو إعادة توجيه.",
       );
       return;
     }
-    onSave({ ...e, video: safeVideoUrl(e.video) || undefined });
+    const trimmedImage = (e.image || "").trim();
+    if (trimmedImage && !safeImageUrl(trimmedImage) && !trimmedImage.startsWith("/")) {
+      setError("رابط صورة التمرين يجب أن يبدأ بـ HTTPS أو /assets/.");
+      return;
+    }
+    const cleaned: Exercise = {
+      id: e.id,
+      name: e.name.trim(),
+      muscle: e.muscle,
+      sets: Number(e.sets) > 0 ? Number(e.sets) : 3,
+      reps: String(e.reps || "10–12").trim(),
+      rest: String(e.rest || "60 ثانية").trim(),
+    };
+    if (e.english?.trim()) cleaned.english = e.english.trim();
+    const validVideo = safeVideoUrl(e.video);
+    if (validVideo) cleaned.video = validVideo;
+    if (e.description?.trim()) cleaned.description = e.description.trim();
+    if (trimmedImage) cleaned.image = trimmedImage;
+    onSave(cleaned);
   };
+  const availableMuscles = muscleList.includes(e.muscle) ? muscleList : [...muscleList, e.muscle];
   return (
     <Modal title={initial ? "تعديل التمرين" : "إضافة تمرين"} onClose={onClose}>
       <div className="form-grid">
@@ -1412,18 +1904,28 @@ function ExerciseModal({
             value={e.muscle}
             onChange={(event) => setE({ ...e, muscle: event.target.value })}
           >
-            {muscles.map((item) => (
-              <option key={item}>{item}</option>
+            {availableMuscles.map((item) => (
+              <option key={item} value={item}>{item}</option>
             ))}
           </select>
         </label>
-        {field("name", "اسم التمرين بالعربية")}
-        {field("english", "الاسم الإنجليزي (اختياري)")}
+        {field("name", "اسم التمرين بالعربية", "مثال: بنش برس مستوي")}
+        {field("english", "الاسم الإنجليزي (اختياري)", "Barbell Bench Press")}
         {field("sets", "المجموعات الافتراضية")}
         {field("reps", "التكرارات الافتراضية")}
         {field("rest", "الراحة")}
-        {field("video", "رابط شرح الفيديو (اختياري)")}
+        {field("image", "صورة التمرين (رابط HTTPS أو /assets/ اختياري)", "https://...")}
+        {field("video", "رابط شرح الفيديو (YouTube / Vimeo اختياري)", "https://www.youtube.com/watch?v=...")}
       </div>
+      <label className="full-width-field">
+        شرح التمرين وملاحظات الأداء (اختياري)
+        <textarea
+          rows={3}
+          value={e.description || ""}
+          onChange={(event) => setE({ ...e, description: event.target.value })}
+          placeholder="خطوات الأداء الصحيح أو تنبيهات الكابتن..."
+        />
+      </label>
       {error && (
         <p className="save-error" role="alert">
           {error}
@@ -1443,26 +1945,40 @@ function ExerciseModal({
 function exerciseUrl(id: string) {
   return `${location.origin}${location.pathname.replace(/admin\/?$/, "")}#/exercise/${encodeURIComponent(id)}`;
 }
+function courseUrl(id: string) {
+  return `${location.origin}${location.pathname.replace(/admin\/?$/, "")}#/course/${encodeURIComponent(id)}`;
+}
 function exerciseTarget(exercise: Exercise) {
   return exerciseUrl(exercise.id);
 }
 function Barcodes({
   exercises,
   setExercises,
+  courses = [],
+  muscleList = muscles,
+  initialQuery = "",
 }: {
   exercises: Exercise[];
   setExercises: React.Dispatch<React.SetStateAction<Exercise[]>>;
+  courses?: ReadyCourse[];
+  muscleList?: string[];
+  initialQuery?: string;
 }) {
-  const [muscle, setMuscle] = useState(muscles[0]);
-  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"exercises" | "courses">("exercises");
+  const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
+  const [query, setQuery] = useState(initialQuery);
   const [editing, setEditing] = useState<Exercise | null>(null);
   const [show, setShow] = useState(false);
   const [selected, setSelected] = useState<Exercise | undefined>();
+  const [selectedCourse, setSelectedCourse] = useState<ReadyCourse | undefined>(courses[0]);
+  useEffect(() => {
+    if (initialQuery) setQuery(initialQuery);
+  }, [initialQuery]);
   const list = exercises.filter(
     (e) =>
-      e.muscle === muscle &&
+      (query.trim() ? true : e.muscle === muscle) &&
       (!query.trim() ||
-        `${e.name} ${e.english || ""}`
+        `${e.name} ${e.english || ""} ${e.muscle}`
           .toLowerCase()
           .includes(query.trim().toLowerCase())),
   );
@@ -1471,17 +1987,24 @@ function Barcodes({
       current && list.some((e) => e.id === current.id) ? current : list[0],
     );
   }, [muscle, query, exercises]);
-  const save = (exercise: Exercise) => {
-    setExercises((items) =>
-      items.some((e) => e.id === exercise.id)
-        ? items.map((e) => (e.id === exercise.id ? exercise : e))
-        : [...items, exercise],
+  useEffect(() => {
+    setSelectedCourse((current) =>
+      current && courses.some((c) => c.id === current.id) ? current : courses[0],
     );
+  }, [courses]);
+  const save = (exercise: Exercise) => {
+    const nextExercises = exercises.some((e) => e.id === exercise.id)
+      ? exercises.map((e) => (e.id === exercise.id ? exercise : e))
+      : [...exercises, exercise];
+    setExercises(nextExercises);
+    window.dispatchEvent(new CustomEvent("alasas-save-exercises", { detail: { exercises: nextExercises } }));
     setSelected(exercise);
     setShow(false);
     setEditing(null);
   };
-  const url = selected ? exerciseUrl(selected.id) : "";
+  const url = mode === "exercises"
+    ? (selected ? exerciseUrl(selected.id) : "")
+    : (selectedCourse ? courseUrl(selectedCourse.id) : "");
   const download = () => {
     const svg = document.querySelector(
       ".qr-detail svg",
@@ -1491,7 +2014,7 @@ function Barcodes({
     const blob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `${selected?.id || "exercise"}-qr.svg`;
+    link.download = `${(mode === "exercises" ? selected?.id : selectedCourse?.id) || "item"}-qr.svg`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -1499,79 +2022,101 @@ function Barcodes({
     <>
       <section className="section-heading">
         <div>
-          <h2>باركودات التمارين</h2>
-          <p>QR ثابت لكل تمرين؛ تغيير الفيديو يغيّر الوجهة دون تغيير الرمز.</p>
+          <h2>باركودات التمارين والكورسات</h2>
+          <p>QR ثابت لكل تمرين ولكل كورس؛ المسح بالكاميرا يفتح صفحة التمرين أو الكورس مباشرة.</p>
         </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setShow(true);
-          }}
-          icon={<Plus size={17} />}
-        >
-          إضافة تمرين
-        </Button>
+        <div className="exercise-library-actions">
+          <Button secondary={mode !== "exercises"} onClick={() => setMode("exercises")} icon={<Dumbbell size={16} />}>باركود التمارين</Button>
+          <Button secondary={mode !== "courses"} onClick={() => setMode("courses")} icon={<FileText size={16} />}>باركود الكورسات ({courses.length})</Button>
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setShow(true);
+            }}
+            icon={<Plus size={17} />}
+          >
+            إضافة تمرين
+          </Button>
+        </div>
       </section>
       <div className="barcode-layout">
         <div className="panel barcode-picker">
-          <label className="barcode-search">
-            <Search size={15} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="ابحث عن تمرين"
-            />
-          </label>
-          <h3>الأقسام</h3>
-          {muscles.map((m) => (
-            <button
-              className={m === muscle ? "selected" : ""}
-              onClick={() => {
-                setMuscle(m);
-                setQuery("");
-              }}
-              key={m}
-            >
-              {m}
-              <ChevronLeft size={15} />
-            </button>
-          ))}
-          <hr />
-          <h3>التمارين ({list.length})</h3>
-          {list.map((e) => (
-            <button
-              className={selected?.id === e.id ? "selected" : ""}
-              onClick={() => setSelected(e)}
-              key={e.id}
-            >
-              {e.name}
-              <small>{e.video ? "فيديو مرتبط" : "بدون فيديو"}</small>
-            </button>
-          ))}
+          {mode === "exercises" ? (
+            <>
+              <label className="barcode-search">
+                <Search size={15} />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="ابحث عن تمرين"
+                />
+              </label>
+              <h3>الأقسام</h3>
+              {muscleList.map((m) => (
+                <button
+                  className={m === muscle ? "selected" : ""}
+                  onClick={() => {
+                    setMuscle(m);
+                    setQuery("");
+                  }}
+                  key={m}
+                >
+                  {m}
+                  <ChevronLeft size={15} />
+                </button>
+              ))}
+              <hr />
+              <h3>التمارين ({list.length})</h3>
+              {list.map((e) => (
+                <button
+                  className={selected?.id === e.id ? "selected" : ""}
+                  onClick={() => setSelected(e)}
+                  key={e.id}
+                >
+                  {e.name}
+                  <small>{e.video ? "فيديو مرتبط" : "صفحة شرح التمرين"}</small>
+                </button>
+              ))}
+            </>
+          ) : (
+            <>
+              <h3>الكورسات الجاهزة ({courses.length})</h3>
+              {courses.map((c) => (
+                <button
+                  className={selectedCourse?.id === c.id ? "selected" : ""}
+                  onClick={() => setSelectedCourse(c)}
+                  key={c.id}
+                >
+                  {c.name}
+                  <small>{c.days.length} أيام تدريب</small>
+                </button>
+              ))}
+            </>
+          )}
         </div>
         <section className="panel qr-detail">
-          {selected ? (
+          {mode === "exercises" && selected ? (
             <>
               <div className="exercise-thumb big">
-                <Dumbbell size={34} />
+                {selected.image ? <img src={selected.image} alt={selected.name} className="exercise-card-img" /> : <Dumbbell size={34} />}
               </div>
               <h2>{selected.name}</h2>
               <p>
-                {selected.video
+                {selected.description || (selected.video
                   ? "رابط الفيديو الحالي محفوظ"
-                  : "أضف رابط فيديو من تعديل التمرين"}
+                  : "أضف رابط فيديو أو شرح من تعديل التمرين")}
               </p>
               <div className="qr-box">
                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
               </div>
-              <code>{url}</code>
+              <code dir="ltr">{url}</code>
               <div className="modal-actions">
                 <Button
                   secondary
                   onClick={() => setEditing(selected)}
                   icon={<Pencil size={15} />}
                 >
-                  تعديل الرابط
+                  تعديل التمرين
                 </Button>
                 <Button
                   secondary
@@ -1596,11 +2141,34 @@ function Barcodes({
                 فتح صفحة التمرين <ExternalLink size={14} />
               </a>
             </>
+          ) : mode === "courses" && selectedCourse ? (
+            <>
+              <div className="exercise-thumb big">
+                <FileText size={34} />
+              </div>
+              <h2>{selectedCourse.name}</h2>
+              <p>{selectedCourse.days.length} أيام تدريب{selectedCourse.notes ? ` · ${selectedCourse.notes}` : ""}</p>
+              <div className="qr-box">
+                <QRCodeSVG value={url} size={180} includeMargin level="M" />
+              </div>
+              <code dir="ltr">{url}</code>
+              <div className="modal-actions">
+                <Button secondary onClick={download} icon={<QrCode size={15} />}>
+                  تنزيل QR الكورس
+                </Button>
+                <Button onClick={() => window.print()} icon={<Printer size={16} />}>
+                  طباعة رمز الكورس
+                </Button>
+              </div>
+              <a className="text-btn" href={url} target="_blank" rel="noreferrer">
+                فتح صفحة الكورس <ExternalLink size={14} />
+              </a>
+            </>
           ) : (
             <Empty
               icon={<QrCode size={28} />}
               title="لا توجد نتائج"
-              text="أضف تمريناً أو غيّر البحث."
+              text={mode === "courses" ? "أنشئ كورساً جاهزاً أولاً لعرض باركود الكورس." : "أضف تمريناً أو غيّر البحث."}
             />
           )}
         </section>
@@ -1609,6 +2177,7 @@ function Barcodes({
         <ExerciseModal
           initial={editing}
           muscle={editing?.muscle || muscle}
+          muscleList={muscleList}
           onClose={() => {
             setShow(false);
             setEditing(null);
@@ -1623,19 +2192,25 @@ function Courses({
   exercises,
   courses,
   setCourses,
+  muscleList = muscles,
 }: {
   exercises: Exercise[];
   courses: ReadyCourse[];
   setCourses: React.Dispatch<React.SetStateAction<ReadyCourse[]>>;
+  muscleList?: string[];
 }) {
   const [editing, setEditing] = useState<ReadyCourse | null>(null);
   const [show, setShow] = useState(false);
+  const [qrCourse, setQrCourse] = useState<ReadyCourse | null>(null);
+  const persistCourses = (nextCourses: ReadyCourse[]) => {
+    setCourses(nextCourses);
+    window.dispatchEvent(new CustomEvent("alasas-save-courses", { detail: { courses: nextCourses } }));
+  };
   const save = (c: ReadyCourse) => {
-    setCourses((x) =>
-      x.some((a) => a.id === c.id)
-        ? x.map((a) => (a.id === c.id ? c : a))
-        : [...x, c],
-    );
+    const nextCourses = courses.some((a) => a.id === c.id)
+      ? courses.map((a) => (a.id === c.id ? c : a))
+      : [...courses, c];
+    persistCourses(nextCourses);
     setShow(false);
   };
   return (
@@ -1643,7 +2218,7 @@ function Courses({
       <section className="section-heading">
         <div>
           <h2>الكورسات الجاهزة</h2>
-          <p>قوالب مستقلة، منظمة حسب اليوم والعضلة والتمرين.</p>
+          <p>قوالب مستقلة، منظمة حسب اليوم والعضلة والتمرين، جاهزة للنسخ أو التعيين لأي مشترك.</p>
         </div>
         <Button
           onClick={() => {
@@ -1662,9 +2237,13 @@ function Courses({
               <div className="panel-head">
                 <div>
                   <h3>{c.name}</h3>
-                  <p>{c.days.length} أيام تدريب</p>
+                  <p>{c.days.length} أيام تدريب{c.notes ? ` · ${c.notes}` : ""}</p>
                 </div>
                 <div className="row-actions">
+                  <button onClick={() => setQrCourse(c)}>
+                    <QrCode size={14} />
+                    QR الكورس
+                  </button>
                   <button
                     onClick={() => {
                       setEditing(c);
@@ -1676,8 +2255,8 @@ function Courses({
                   </button>
                   <button
                     onClick={() =>
-                      setCourses((x) => [
-                        ...x,
+                      persistCourses([
+                        ...courses,
                         {
                           ...c,
                           id: uid(),
@@ -1691,9 +2270,10 @@ function Courses({
                     نسخ
                   </button>
                   <button
-                    onClick={() =>
-                      setCourses((x) => x.filter((a) => a.id !== c.id))
-                    }
+                    onClick={() => {
+                      if (!window.confirm(`حذف القالب "${c.name}"؟ لن تتأثر كورسات المشتركين الحاليين.`)) return;
+                      persistCourses(courses.filter((a) => a.id !== c.id));
+                    }}
                   >
                     <Trash2 size={14} />
                     حذف
@@ -1713,9 +2293,9 @@ function Courses({
                     day.map((e, n) => (
                       <div className="ready-exercise" key={`${e.id}-${n}`}>
                         <span>{n + 1}</span>
-                        <b>{e.name}</b>
+                        <b>{e.name}{e.notes ? ` (${e.notes})` : ""}</b>
                         <strong>
-                          {e.sets} × {e.reps}
+                          {e.sets} × {e.reps}{e.weight ? ` · ${e.weight}` : ""}
                         </strong>
                       </div>
                     ))
@@ -1734,10 +2314,27 @@ function Courses({
           text="أنشئ أول قالب منظم حسب الأيام والعضلات."
         />
       )}
+      {qrCourse && (
+        <Modal title={`باركود الكورس — ${qrCourse.name}`} onClose={() => setQrCourse(null)}>
+          <div className="qr-detail">
+            <div className="qr-box">
+              <QRCodeSVG value={courseUrl(qrCourse.id)} size={180} includeMargin level="M" />
+            </div>
+            <code dir="ltr">{courseUrl(qrCourse.id)}</code>
+            <div className="modal-actions">
+              <a className="primary-btn" href={courseUrl(qrCourse.id)} target="_blank" rel="noreferrer">
+                فتح صفحة الكورس <ExternalLink size={14} />
+              </a>
+              <Button secondary onClick={() => setQrCourse(null)}>إغلاق</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {show && (
         <CourseWizard
           initial={editing}
           exercises={exercises}
+          muscleList={muscleList}
           onClose={() => setShow(false)}
           onSave={save}
           title={editing ? "تعديل الكورس الجاهز" : "إنشاء كورس جاهز"}
@@ -1749,21 +2346,24 @@ function Courses({
 function CourseWizard({
   initial,
   exercises,
+  muscleList = muscles,
   onClose,
   onSave,
   title,
 }: {
   initial: ReadyCourse | null;
   exercises: Exercise[];
+  muscleList?: string[];
   onClose: () => void;
   onSave: (c: ReadyCourse) => void;
   title: string;
 }) {
   const [step, setStep] = useState(1);
   const [name, setName] = useState(initial?.name || "");
+  const [notes, setNotes] = useState(initial?.notes || "");
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
-  const [muscle, setMuscle] = useState(muscles[0]);
+  const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
   const [selected, setSelected] = useState<DayPlan[]>(
     initial ? cloneDays(initial.days) : blankDays(3),
   );
@@ -1786,6 +2386,18 @@ function CourseWizard({
     setSelected((x) =>
       x.map((list, i) => (i === day ? list.filter((e) => e.id !== id) : list)),
     );
+  const move = (index: number, direction: -1 | 1) =>
+    setSelected((x) =>
+      x.map((list, i) => {
+        if (i !== day) return list;
+        const target = index + direction;
+        if (target < 0 || target >= list.length) return list;
+        const copy = [...list];
+        const [item] = copy.splice(index, 1);
+        copy.splice(target, 0, item);
+        return copy;
+      }),
+    );
   const update = (id: string, key: keyof MemberExercise, value: string) =>
     setSelected((x) =>
       x.map((list, i) =>
@@ -1803,17 +2415,27 @@ function CourseWizard({
       <WizardSteps step={step} />
       {step === 1 && (
         <div className="wizard-pane">
-          <h3>اسم الكورس</h3>
+          <h3>اسم الكورس والملاحظات</h3>
           <p>البيانات لا تحفظ حتى تضغط حفظ.</p>
-          <label>
-            اسم الكورس
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="مثال: كورس مبتدئين"
-            />
-          </label>
+          <div className="form-grid">
+            <label>
+              اسم الكورس
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="مثال: كورس مبتدئين شامل"
+              />
+            </label>
+            <label>
+              ملاحظات الكورس (اختياري)
+              <input
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="مثال: إحماء 10 دقائق قبل التمرين"
+              />
+            </label>
+          </div>
         </div>
       )}
       {step === 2 && (
@@ -1855,14 +2477,16 @@ function CourseWizard({
           setDay={setDay}
           muscle={muscle}
           setMuscle={setMuscle}
+          muscleList={muscleList}
           exercises={exercises}
           selected={selected}
           add={add}
           update={update}
           remove={remove}
+          move={move}
         />
       )}{" "}
-      {step === 4 && <Review name={name} days={days} selected={selected} />}
+      {step === 4 && <Review name={name} notes={notes} days={days} selected={selected} />}
       <WizardActions
         step={step}
         setStep={setStep}
@@ -1870,7 +2494,8 @@ function CourseWizard({
         save={() =>
           onSave({
             id: initial?.id || uid(),
-            name: name || "كورس بدون اسم",
+            name: name.trim() || "كورس بدون اسم",
+            ...(notes.trim() ? { notes: notes.trim() } : {}),
             days: cloneDays(selected.slice(0, days)),
           })
         }
@@ -1881,7 +2506,7 @@ function CourseWizard({
 function WizardSteps({ step }: { step: number }) {
   return (
     <div className="wizard-steps">
-      {["اسم الكورس", "أيام التدريب", "اختيار التمارين", "مراجعة وحفظ"].map(
+      {["البيانات الأساسية", "أيام التدريب", "اختيار التمارين", "مراجعة وحفظ"].map(
         (x, i) => (
           <span className={step === i + 1 ? "active" : ""} key={x}>
             <b>{i + 1}</b>
@@ -1898,11 +2523,13 @@ function Picker({
   setDay,
   muscle,
   setMuscle,
+  muscleList = muscles,
   exercises,
   selected,
   add,
   update,
   remove,
+  move,
   disabled = false,
 }: {
   days: number;
@@ -1910,11 +2537,13 @@ function Picker({
   setDay: (n: number) => void;
   muscle: string;
   setMuscle: (s: string) => void;
+  muscleList?: string[];
   exercises: Exercise[];
   selected: DayPlan[];
   add: (e: Exercise) => void;
   update: (id: string, key: keyof MemberExercise, value: string) => void;
   remove: (id: string) => void;
+  move?: (index: number, direction: -1 | 1) => void;
   disabled?: boolean;
 }) {
   return (
@@ -1934,7 +2563,7 @@ function Picker({
       </div>
       <div className="picker-layout">
         <div className="picker-muscles">
-          {muscles.map((m) => (
+          {muscleList.map((m) => (
             <button
               className={muscle === m ? "active" : ""}
               onClick={() => setMuscle(m)}
@@ -1946,7 +2575,7 @@ function Picker({
         </div>
         <div className="picker-exercises">
           {exercises
-            .filter((e) => normalizeMuscle(e.muscle) === muscle)
+            .filter((e) => normalizeMuscle(e.muscle) === muscle || e.muscle === muscle)
             .map((e) => (
               <button
                 disabled={disabled}
@@ -1973,12 +2602,12 @@ function Picker({
       </div>
       {selected[day]?.length > 0 && (
         <div className="selected-exercises">
-          {selected[day].map((e) => (
-            <div key={e.id}>
+          {selected[day].map((e, idx) => (
+            <div key={e.id} className="selected-exercise-row">
               <div>
-                <b>{e.name}</b>
+                <b>{idx + 1}. {e.name}</b>
                 <small>
-                  {e.sets} × {e.reps} · راحة {e.rest} · {safeVideoUrl(e.video) ? "رابط شرح" : "QR عند الطباعة"}
+                  {e.muscle} · {e.sets} × {e.reps} · راحة {e.rest}
                 </small>
               </div>
               <label>
@@ -2009,14 +2638,36 @@ function Picker({
                 الوزن
                 <input
                   disabled={disabled}
+                  placeholder="مثال: 20 كغم"
                   value={e.weight || ""}
                   onChange={(x) => update(e.id, "weight", x.target.value)}
                 />
               </label>
+              <label>
+                ملاحظات
+                <input
+                  disabled={disabled}
+                  placeholder="ملاحظة للتمرين"
+                  value={e.notes || ""}
+                  onChange={(x) => update(e.id, "notes", x.target.value)}
+                />
+              </label>
               {!disabled && (
-                <button className="row-icon" onClick={() => remove(e.id)}>
-                  <Trash2 size={14} />
-                </button>
+                <div className="exercise-order-actions">
+                  {move && (
+                    <>
+                      <button type="button" className="row-icon" title="تحريك لأعلى" disabled={idx === 0} onClick={() => move(idx, -1)}>
+                        <ArrowUp size={14} />
+                      </button>
+                      <button type="button" className="row-icon" title="تحريك لأسفل" disabled={idx === selected[day].length - 1} onClick={() => move(idx, 1)}>
+                        <ArrowDown size={14} />
+                      </button>
+                    </>
+                  )}
+                  <button type="button" className="row-icon" title="حذف التمرين من اليوم" onClick={() => remove(e.id)}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -2027,10 +2678,12 @@ function Picker({
 }
 function Review({
   name,
+  notes,
   days,
   selected,
 }: {
   name: string;
+  notes?: string;
   days: number;
   selected: DayPlan[];
 }) {
@@ -2039,7 +2692,7 @@ function Review({
       <h3>مراجعة الكورس</h3>
       <div className="review-summary">
         <b>{name || "كورس بدون اسم"}</b>
-        <span>{days} أيام تدريب</span>
+        <span>{days} أيام تدريب{notes ? ` · ${notes}` : ""}</span>
       </div>
       {selected.slice(0, days).map((list, i) => (
         <div className="review-day" key={i}>
@@ -2049,7 +2702,7 @@ function Review({
           {list.length ? (
             list.map((e) => (
               <span key={e.id}>
-                {e.name} · {e.sets} × {e.reps}
+                {e.name} · {e.sets} × {e.reps}{e.weight ? ` (${e.weight})` : ""}{e.notes ? ` — ${e.notes}` : ""}
               </span>
             ))
           ) : (
@@ -2110,7 +2763,23 @@ function requestMemberDelete(memberId: string) {
     window.dispatchEvent(new CustomEvent("alasas-delete-member", { detail: { memberId, resolve } }));
   });
 }
-function MembersWithPin({ exercises, members, courses, setMembers, settings }: { exercises: Exercise[]; members: Member[]; courses: ReadyCourse[]; setMembers: React.Dispatch<React.SetStateAction<Member[]>>; settings: SettingsData }) {
+function MembersWithPin({
+  exercises,
+  members,
+  courses,
+  setMembers,
+  settings,
+  muscleList = muscles,
+  initialSearch = "",
+}: {
+  exercises: Exercise[];
+  members: Member[];
+  courses: ReadyCourse[];
+  setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
+  settings: SettingsData;
+  muscleList?: string[];
+  initialSearch?: string;
+}) {
   const [editing, setEditing] = useState<Member | null>(null);
   const [show, setShow] = useState(false);
   const [pin, setPin] = useState('');
@@ -2119,43 +2788,136 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
   const [pinError, setPinError] = useState('');
   const [issueTarget, setIssueTarget] = useState<Member | null>(null);
   const [issuePhone, setIssuePhone] = useState('');
+  const [issueCustomPin, setIssueCustomPin] = useState('');
+  const [search, setSearch] = useState(initialSearch);
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [revealedPin, setRevealedPin] = useState<{ memberId: string; pin: string } | null>(null);
+  const [revealingId, setRevealingId] = useState('');
+  const [copiedId, setCopiedId] = useState('');
+  const [previewMember, setPreviewMember] = useState<Member | null>(null);
   const [deletingId, setDeletingId] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deleteSuccess, setDeleteSuccess] = useState('');
   const [retryDeleteId, setRetryDeleteId] = useState('');
   const [deletionConflicts, setDeletionConflicts] = useState<Array<{ id: string; member: Record<string, unknown>; deletedAt: string }>>([]);
   useEffect(() => {
+    if (initialSearch) setSearch(initialSearch);
+  }, [initialSearch]);
+  useEffect(() => {
     let active = true;
     void readAdminDeletionConflicts().then((conflicts) => { if (active) setDeletionConflicts(conflicts); }).catch(() => undefined);
     return () => { active = false; };
   }, [members]);
-  const save = async (m: Member) => {
-    const nextMembers = members.some(a => a.id === m.id)
-      ? members.map(a => a.id === m.id ? { ...a, ...m, photo: '', ...(m.authUid || a.authUid ? { authUid: m.authUid || a.authUid } : {}), ...(m.phoneE164 ? { phoneE164: m.phoneE164, phoneDisplay: m.phoneDisplay } : {}) } : a)
-      : [{ ...m, photo: '' }, ...members];
+  useEffect(() => {
+    if (!revealedPin) return;
+    const timer = window.setTimeout(() => setRevealedPin(null), 15_000);
+    const onVisibility = () => {
+      if (document.hidden) setRevealedPin(null);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [revealedPin]);
+  useEffect(() => () => setRevealedPin(null), []);
+  const save = async (m: Member & { customPin?: string }) => {
+    const isExisting = members.some(a => a.id === m.id);
+    const { customPin, ...cleanMember } = m;
+    const nextMembers = isExisting
+      ? members.map(a => a.id === cleanMember.id ? { ...a, ...cleanMember, photo: '', ...(cleanMember.authUid || a.authUid ? { authUid: cleanMember.authUid || a.authUid } : {}), ...(cleanMember.phoneE164 ? { phoneE164: cleanMember.phoneE164, phoneDisplay: cleanMember.phoneDisplay } : {}) } : a)
+      : [{ ...cleanMember, photo: '' }, ...members];
     const ok = await requestMemberSave({ schemaVersion: 1, settings, exercises, members: nextMembers, courses });
     if (ok) {
       setMembers(nextMembers);
       setShow(false);
       setEditing(null);
+      if (pinServiceConfigured && cleanMember.phoneE164) {
+        try {
+          if (customPin && /^\d{4}$/.test(customPin)) {
+            const issued = await issueMemberPin(cleanMember.id, cleanMember.phoneE164, cleanMember.membershipId || cleanMember.id, true, customPin);
+            setPin(issued);
+            setPinMember(cleanMember);
+            setRevealedPin({ memberId: cleanMember.id, pin: issued });
+          } else if (!isExisting) {
+            const issued = await issueMemberPin(cleanMember.id, cleanMember.phoneE164, cleanMember.membershipId || cleanMember.id, false);
+            setPin(issued);
+            setPinMember(cleanMember);
+            setRevealedPin({ memberId: cleanMember.id, pin: issued });
+          } else {
+            void revealMemberPin(cleanMember.id).catch(() => undefined);
+          }
+        } catch (err) {
+          setPinError(err instanceof Error ? err.message : "تم حفظ المشترك، لكن تعذر مزامنة PIN تلقائياً");
+        }
+      }
     }
   };
-  const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); };
-  const issue = async (m: Member, requestedPhone: string, reset = false) => {
+  const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); setIssueCustomPin(''); };
+  const issue = async (m: Member, requestedPhone: string, reset = false, customPinValue?: string) => {
     setPinBusy(true); setPinError(''); setPin('');
     try {
       const phone = normalizeIraqiPhone(requestedPhone);
       const remote = await readAdminData<AppPayload>();
       const persisted = normalizeMembers(remote?.members).find(item => item.id === m.id);
       if (!persisted) throw new Error('احفظ المشترك أولاً ثم تحقق من ظهوره في Firebase قبل إصدار PIN');
-    setPin(await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, reset)); setPinMember(persisted);
-      setIssueTarget(null); setIssuePhone('');
+      const nextPin = await issueMemberPin(persisted.id, phone, persisted.membershipId || persisted.id, reset, customPinValue);
+      setPin(nextPin); setPinMember(persisted);
+      setRevealedPin({ memberId: persisted.id, pin: nextPin });
+      setIssueTarget(null); setIssuePhone(''); setIssueCustomPin('');
     } catch (e) { setPinError(e instanceof Error ? e.message : 'تعذر إصدار PIN من الخدمة الموثوقة'); }
     finally { setPinBusy(false); }
+  };
+  const toggleRevealPin = async (m: Member) => {
+    if (revealedPin?.memberId === m.id) {
+      setRevealedPin(null);
+      return;
+    }
+    if (revealingId) return;
+    setRevealingId(m.id);
+    setPinError('');
+    try {
+      const revealed = await revealMemberPin(m.id);
+      setRevealedPin({ memberId: m.id, pin: revealed });
+    } catch (e) {
+      openIssue(m);
+      setPinError(e instanceof Error ? e.message : "تعذر إظهار رمز PIN للمشترك");
+    } finally {
+      setRevealingId('');
+    }
+  };
+  const copyPinForMember = async (m: Member) => {
+    setPinError('');
+    try {
+      let currentPin = revealedPin?.memberId === m.id ? revealedPin.pin : "";
+      if (!currentPin) {
+        setRevealingId(m.id);
+        currentPin = await revealMemberPin(m.id);
+        setRevealedPin({ memberId: m.id, pin: currentPin });
+      }
+      await navigator.clipboard.writeText(currentPin);
+      setCopiedId(m.id);
+      window.setTimeout(() => setCopiedId((prev) => (prev === m.id ? "" : prev)), 2000);
+    } catch (e) {
+      openIssue(m);
+      setPinError(e instanceof Error ? e.message : "تعذر نسخ الرمز");
+    } finally {
+      setRevealingId('');
+    }
+  };
+  const quickResetPin = async (m: Member) => {
+    const phoneSource = m.phoneE164 || m.phoneDisplay || m.phone || "";
+    if (!phoneSource) {
+      openIssue(m);
+      return;
+    }
+    if (!window.confirm(`إعادة تعيين رمز PIN للمشترك ${m.name}؟ سيتم إصدار رمز رباعي جديد فوراً وإبطال الرمز السابق.`)) return;
+    await issue(m, phoneSource, true);
   };
   const performDelete = async (memberId: string, memberName: string) => {
     if (deletingId) return;
     setDeletingId(memberId); setDeleteError(''); setDeleteSuccess('');
+    if (revealedPin?.memberId === memberId) setRevealedPin(null);
     const ok = await requestMemberDelete(memberId);
     if (ok) {
       setMembers(current => current.filter(item => item.id !== memberId));
@@ -2172,30 +2934,125 @@ function MembersWithPin({ exercises, members, courses, setMembers, settings }: {
     if (deletingId || !window.confirm(`حذف المشترك ${member.name}؟ سيتم إبطال PIN والجلسات أيضاً.`)) return;
     void performDelete(member.id, member.name);
   };
+  const filteredMembers = members.filter((m) => {
+    if (statusFilter === "active" && m.active === false) return false;
+    if (statusFilter === "inactive" && m.active !== false) return false;
+    if (!search.trim()) return true;
+    const hay = `${m.name} ${m.membershipId || ""} ${m.phoneDisplay || ""} ${m.phoneE164 || ""} ${m.courseName || ""}`.toLowerCase();
+    return hay.includes(search.trim().toLowerCase());
+  });
   return <>
-    <section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات والطباعة.</p></div><Button onClick={() => { setEditing(null); setShow(true); }} icon={<Plus size={17} />}>إضافة مشترك</Button></section>
+    <section className="section-heading"><div><h2>المشتركون</h2><p>لكل مشترك نسخة مستقلة من الكورس والبيانات ورمز PIN والطباعة.</p></div><Button onClick={() => { setEditing(null); setShow(true); }} icon={<Plus size={17} />}>إضافة مشترك</Button></section>
+    <div className="panel members-filter-bar">
+      <label className="barcode-search">
+        <Search size={15} />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم أو رقم الهاتف أو رقم العضوية..." />
+      </label>
+      <div className="filter-pills" role="group" aria-label="تصفية حسب الحالة">
+        <button type="button" className={statusFilter === "all" ? "active" : ""} onClick={() => setStatusFilter("all")}>الكل ({members.length})</button>
+        <button type="button" className={statusFilter === "active" ? "active" : ""} onClick={() => setStatusFilter("active")}>النشطون ({members.filter(m => m.active !== false).length})</button>
+        <button type="button" className={statusFilter === "inactive" ? "active" : ""} onClick={() => setStatusFilter("inactive")}>غير النشطين ({members.filter(m => m.active === false).length})</button>
+      </div>
+    </div>
     {deletionConflicts.length > 0 && <section className="panel" role="region" aria-label="سجلات حذف غير مكتملة"><h3>سجلات تحتاج إكمال الحذف</h3><p>هذه السجلات تحمل Tombstone لكنها بقيت في RTDB بعد انقطاع أو سباق سابق. لا يمكن إصدار PIN لها.</p>{deletionConflicts.map(conflict => <div key={conflict.id} className="save-status"><b>{String(conflict.member.name || 'عضوية')}</b><span dir="ltr"> {conflict.id}</span><button className="text-btn" disabled={Boolean(deletingId)} onClick={() => remove({ id: conflict.id, name: String(conflict.member.name || 'العضوية') } as Member)}>إكمال الحذف</button></div>)}</section>}
     {deleteError && <p className="save-error" role="alert">{deleteError} {retryDeleteId && <button className="text-btn" disabled={Boolean(deletingId)} onClick={() => void performDelete(retryDeleteId, 'العضوية')}>{deletingId === retryDeleteId ? 'جارٍ إعادة المحاولة…' : 'إعادة المحاولة'}</button>}</p>}
     {deleteSuccess && <p className="save-status" role="status">{deleteSuccess}</p>}
-    {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>بيانات الدخول — {issueTarget.name}</b><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'} · إصدار PIN الأول لا يتغير عند تكرار الطلب.</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone, false)}>{pinBusy ? 'جارٍ التحقق…' : 'إصدار PIN لأول مرة'}</button><button className="secondary-btn danger-btn" disabled={pinBusy} onClick={() => { if (window.confirm('إعادة تعيين PIN ستبطل الرمز الحالي فوراً وتصدر رمزاً جديداً. هل تريد المتابعة؟')) void issue(issueTarget, issuePhone, true); }}>{pinBusy ? 'جارٍ المعالجة…' : 'إعادة تعيين PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); }}>إلغاء</button></div></section>}
+    {issueTarget && <section className="panel pin-issue-form" role="dialog" aria-label="إصدار PIN"><b>بيانات الدخول — {issueTarget.name}</b><div className="form-grid"><label>رقم هاتف المشترك<input inputMode="tel" autoComplete="tel" value={issuePhone} onChange={e => setIssuePhone(e.target.value)} /></label><label>تعيين PIN رباعي محدد (اختياري)<input dir="ltr" inputMode="numeric" maxLength={4} placeholder="اتركه فارغاً للتوليد التلقائي" value={issueCustomPin} onChange={e => setIssueCustomPin(e.target.value.replace(/\D/g, '').slice(0, 4))} /></label></div><small>المعروض: {memberPhoneDisplay(issueTarget) || 'لا يوجد رقم صالح'} · الرمز يشفر بمعيار AES-256-GCM مع سجل تدقيق أمني.</small><div><button className="secondary-btn" disabled={pinBusy} onClick={() => issue(issueTarget, issuePhone, false, issueCustomPin || undefined)}>{pinBusy ? 'جارٍ التحقق…' : 'إصدار PIN لأول مرة'}</button><button className="secondary-btn danger-btn" disabled={pinBusy} onClick={() => { if (window.confirm('إعادة تعيين PIN ستبطل الرمز الحالي فوراً وتصدر رمزاً جديداً. هل تريد المتابعة؟')) void issue(issueTarget, issuePhone, true, issueCustomPin || undefined); }}>{pinBusy ? 'جارٍ المعالجة…' : 'إعادة تعيين PIN'}</button><button className="secondary-btn" disabled={pinBusy} onClick={() => { setIssueTarget(null); setIssuePhone(''); setIssueCustomPin(''); }}>إلغاء</button></div></section>}
     {pin && <section className="pin-card" role="status" aria-label="بطاقة رمز الدخول"><header><b>✓ تم إصدار رمز الدخول بنجاح</b><button className="icon-btn" aria-label="إغلاق بطاقة PIN" onClick={() => { setPin(''); setPinMember(null); }}><X size={17}/></button></header><div className="pin-card-meta"><span>المشترك: <b>{pinMember?.name || '—'}</b></span><span>رقم العضوية: <b>{pinMember?.membershipId || '—'}</b></span></div><p>رمز الدخول الخاص بك</p><strong dir="ltr">{pin.split('').join('  ')}</strong><div><button className="primary-btn" onClick={() => navigator.clipboard.writeText(pin)}>نسخ الرمز</button><button className="secondary-btn" onClick={() => window.print()}>طباعة البطاقة</button><button className="secondary-btn" onClick={() => { setPin(''); setPinMember(null); }}>إغلاق</button></div><small>🔒 يظهر هذا الرمز مرة واحدة فقط، ولا يُحفظ في المتصفح أو Firebase.</small></section>}
     {pinError && <p className="auth-error" role="alert">{pinError}</p>}
-    {members.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>تاريخ الإنشاء</th><th>الطول</th><th>الوزن</th><th>الأيام</th><th>الإجراءات</th></tr></thead><tbody>{members.map(m => <tr key={m.id}><td><div className="member-cell"><div className="avatar">{m.name.slice(0, 1)}</div><b>{m.name}</b></div></td><td>{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td><td>{m.createdAt}</td><td>{m.height || '—'} سم</td><td>{m.weight || '—'} كغم</td><td>{m.days.length}</td><td><div className="row-actions"><button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button><button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button><button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />بيانات الدخول / PIN</button><button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button><button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button></div></td></tr>)}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="ابدأ بإضافة مشترك" text="Wizard منظم لبناء كورس مستقل." />}
-    {(show || editing) && <MemberWizard initial={editing} exercises={exercises} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
+    {filteredMembers.length ? <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المشترك</th><th>الهاتف</th><th>رمز المشترك (PIN)</th><th>الاشتراك</th><th>الطول / الوزن</th><th>الكورس</th><th>الإجراءات</th></tr></thead><tbody>{filteredMembers.map(m => {
+      const isPinVisible = revealedPin?.memberId === m.id;
+      const isRevealing = revealingId === m.id;
+      return <tr key={m.id}>
+        <td>
+          <div className="member-cell">
+            <div className="avatar">{m.name.slice(0, 1)}</div>
+            <div>
+              <b>{m.name}</b>
+              <small style={{ display: "block", color: "var(--muted)" }}>{m.membershipId || m.id} · {m.active === false ? "غير نشط" : "نشط"}</small>
+            </div>
+          </div>
+        </td>
+        <td dir="ltr">{memberPhoneDisplay(m) || 'يُدخل عند الإصدار'}</td>
+        <td>
+          <div className="pin-cell-controls" aria-label={`رمز الدخول للمشترك ${m.name}`}>
+            <code className={isPinVisible ? "pin-mask-code revealed" : "pin-mask-code"} dir="ltr">
+              {isPinVisible ? revealedPin.pin : "••••"}
+            </code>
+            <button
+              type="button"
+              className="pin-action-icon"
+              disabled={isRevealing || pinBusy || Boolean(deletingId)}
+              aria-label={isPinVisible ? `إخفاء PIN المشترك ${m.name}` : `إظهار PIN المشترك ${m.name}`}
+              title={isPinVisible ? "إخفاء الرمز" : "إظهار الرمز الحقيقي"}
+              onClick={() => void toggleRevealPin(m)}
+            >
+              {isPinVisible ? <Eye size={15} /> : <EyeOff size={15} />}
+            </button>
+            <button
+              type="button"
+              className="pin-action-icon"
+              disabled={isRevealing || pinBusy || Boolean(deletingId)}
+              aria-label={`نسخ PIN المشترك ${m.name}`}
+              title="نسخ الرمز"
+              onClick={() => void copyPinForMember(m)}
+            >
+              <Copy size={14} />
+              {copiedId === m.id && <span className="pin-copied-badge">تم النسخ</span>}
+            </button>
+            <button
+              type="button"
+              className="pin-action-icon"
+              disabled={isRevealing || pinBusy || Boolean(deletingId)}
+              aria-label={`إعادة تعيين PIN المشترك ${m.name}`}
+              title="إعادة تعيين PIN"
+              onClick={() => void quickResetPin(m)}
+            >
+              <RotateCcw size={14} />
+            </button>
+          </div>
+        </td>
+        <td>
+          <div>{m.createdAt}</div>
+          {m.expiresAt && <small style={{ color: "var(--muted)" }}>ينتهي: {m.expiresAt}</small>}
+        </td>
+        <td>{m.height || '—'} سم / {m.weight || '—'} كغم</td>
+        <td>
+          <div>{m.courseName || `${m.days.length} أيام`}</div>
+          <small style={{ color: "var(--muted)" }}>{m.days.reduce((s, d) => s + d.length, 0)} تمرين</small>
+        </td>
+        <td>
+          <div className="row-actions">
+            <button disabled={Boolean(deletingId)} onClick={() => setEditing(m)}><ExternalLink size={14} />عرض</button>
+            <button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button>
+            <button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إدارة PIN</button>
+            <button disabled={Boolean(deletingId)} onClick={() => setPreviewMember(m)}><FileText size={14} />معاينة الطباعة</button>
+            <button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button>
+            <button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button>
+          </div>
+        </td>
+      </tr>;
+    })}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="لا يوجد مشتركون مطابقون" text="أضف مشتركاً جديداً أو غيّر معايير البحث والتصفية." />}
+    {(show || editing) && <MemberWizard initial={editing} exercises={exercises} courses={courses} muscleList={muscleList} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
+    {previewMember && <PrintPreviewModal member={previewMember} settings={settings} onClose={() => setPreviewMember(null)} />}
   </>;
 }
 
 function MemberWizard({
   initial,
   exercises,
+  courses = [],
+  muscleList = muscles,
   onClose,
   onSave,
   viewOnly = false,
 }: {
   initial: Member | null;
   exercises: Exercise[];
+  courses?: ReadyCourse[];
+  muscleList?: string[];
   onClose: () => void;
-  onSave: (m: Member) => void | Promise<void>;
+  onSave: (m: Member & { customPin?: string }) => void | Promise<void>;
   viewOnly?: boolean;
 }) {
   const [step, setStep] = useState(1);
@@ -2203,16 +3060,23 @@ function MemberWizard({
   const [membershipId, setMembershipId] = useState(
     initial?.membershipId || `M-${Date.now().toString().slice(-6)}`,
   );
-  const [authUid, setAuthUid] = useState(initial?.authUid || "");
+  const [authUid] = useState(initial?.authUid || "");
   const [phone, setPhone] = useState(initial?.phoneDisplay || initial?.phoneE164 || initial?.phone || "");
   const [active, setActive] = useState(initial?.active !== false);
   const [height, setHeight] = useState(initial?.height || "");
   const [weight, setWeight] = useState(initial?.weight || "");
+  const [createdAt, setCreatedAt] = useState(
+    initial?.createdAt || new Date().toISOString().slice(0, 10),
+  );
+  const [expiresAt, setExpiresAt] = useState(initial?.expiresAt || "");
+  const [courseName, setCourseName] = useState(initial?.courseName || "");
+  const [notes, setNotes] = useState(initial?.notes || "");
+  const [customPin, setCustomPin] = useState("");
   const [validationError, setValidationError] = useState("");
   const [saving, setSaving] = useState(false);
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
-  const [muscle, setMuscle] = useState(muscles[0]);
+  const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
   const [selected, setSelected] = useState<DayPlan[]>(
     initial ? cloneDays(initial.days) : blankDays(3),
   );
@@ -2221,6 +3085,16 @@ function MemberWizard({
       setSelected((x) => Array.from({ length: days }, (_, i) => x[i] || [])),
     [days],
   );
+  const applyReadyCourse = (templateId: string) => {
+    const found = courses.find((c) => c.id === templateId);
+    if (!found) return;
+    setCourseName(found.name);
+    if (found.notes && !notes) setNotes(found.notes);
+    const cloned = cloneDays(found.days);
+    setDays(Math.max(1, cloned.length));
+    setSelected(cloned);
+    setDay(0);
+  };
   const add = (e: Exercise) =>
     setSelected((x) =>
       x.map((list, i) =>
@@ -2234,6 +3108,18 @@ function MemberWizard({
   const remove = (id: string) =>
     setSelected((x) =>
       x.map((list, i) => (i === day ? list.filter((e) => e.id !== id) : list)),
+    );
+  const move = (index: number, direction: -1 | 1) =>
+    setSelected((x) =>
+      x.map((list, i) => {
+        if (i !== day) return list;
+        const target = index + direction;
+        if (target < 0 || target >= list.length) return list;
+        const copy = [...list];
+        const [item] = copy.splice(index, 1);
+        copy.splice(target, 0, item);
+        return copy;
+      }),
     );
   const update = (id: string, key: keyof MemberExercise, value: string) =>
     setSelected((x) =>
@@ -2262,14 +3148,15 @@ function MemberWizard({
       <WizardSteps step={step} />
       {step === 1 && (
         <div className="wizard-pane">
-          <h3>معلومات المشترك</h3>
+          <h3>معلومات المشترك والاشتراك</h3>
           <div className="form-grid">
             <label>
-              اسم المشترك
+              اسم المشترك الكامل
               <input
                 disabled={viewOnly}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                placeholder="الاسم الثلاثي أو الكامل"
               />
             </label>
             <label>
@@ -2278,6 +3165,29 @@ function MemberWizard({
                 disabled={viewOnly}
                 value={membershipId}
                 onChange={(e) => setMembershipId(e.target.value)}
+              />
+            </label>
+            <label>
+              رقم هاتف المشترك (مطلوب)
+              <input
+                disabled={viewOnly}
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="0770 123 4567 أو +964 770 123 4567"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </label>
+            <label>
+              رمز الدخول PIN (4 أرقام — اختياري)
+              <input
+                disabled={viewOnly}
+                dir="ltr"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder={initial ? "اتركه فارغاً للإبقاء على الرمز الحالي" : "يُولّد تلقائياً إذا تُرك فارغاً"}
+                value={customPin}
+                onChange={(e) => setCustomPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
               />
             </label>
             <label>
@@ -2297,14 +3207,52 @@ function MemberWizard({
               />
             </label>
             <label>
-              رقم هاتف المشترك (مطلوب)
+              تاريخ الاشتراك
               <input
                 disabled={viewOnly}
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="0770 123 4567 أو +964 770 123 4567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                type="date"
+                dir="ltr"
+                value={/^\d{4}-\d{2}-\d{2}$/.test(createdAt) ? createdAt : ""}
+                onChange={(e) => setCreatedAt(e.target.value || new Date().toISOString().slice(0, 10))}
+              />
+            </label>
+            <label>
+              تاريخ انتهاء الاشتراك (اختياري)
+              <input
+                disabled={viewOnly}
+                type="date"
+                dir="ltr"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+              />
+            </label>
+            <label>
+              اسم الكورس المعيّن (اختياري)
+              <input
+                disabled={viewOnly}
+                value={courseName}
+                onChange={(e) => setCourseName(e.target.value)}
+                placeholder="مثال: كورس تضخيم متقدم"
+              />
+            </label>
+            {!viewOnly && courses.length > 0 && (
+              <label>
+                نسخ من كورس جاهز (اختياري)
+                <select defaultValue="" onChange={(e) => applyReadyCourse(e.target.value)}>
+                  <option value="">-- اختر قالباً جاهزاً لتعبئة الأيام والتمارين --</option>
+                  {courses.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.days.length} أيام)</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="full-width-field">
+              ملاحظات الكابتن للمشترك (اختياري)
+              <input
+                disabled={viewOnly}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="توجيهات غذائية أو تدريبية..."
               />
             </label>
             {!viewOnly && (
@@ -2328,8 +3276,7 @@ function MemberWizard({
           </div>
           {!viewOnly && (
             <p>
-              يصدر المدرب PIN رباعياً من زر الإصدار بعد حفظ المشترك. لا يُستخدم
-              Google لتسجيل المشتركين.
+              يُحفظ رمز PIN مشفراً ويمكن للكابتن إظهاره أو نسخه من أيقونة العين بجانب المشترك.
             </p>
           )}
           {!viewOnly && <PhonePreview value={phone} />}
@@ -2369,15 +3316,17 @@ function MemberWizard({
           setDay={setDay}
           muscle={muscle}
           setMuscle={setMuscle}
+          muscleList={muscleList}
           exercises={exercises}
           selected={selected}
           add={add}
           update={update}
           remove={remove}
+          move={move}
           disabled={viewOnly}
         />
       )}{" "}
-      {step === 4 && <Review name={name} days={days} selected={selected} />}
+      {step === 4 && <Review name={name} notes={notes} days={days} selected={selected} />}
       <div className="modal-actions">
         <Button
           secondary
@@ -2398,6 +3347,9 @@ function MemberWizard({
                 const normalizedMemberName = cleanMemberName(name);
                 if (!phone.trim()) throw new Error("رقم هاتف المشترك مطلوب قبل الحفظ");
                 const normalizedMemberPhone = normalizeIraqiPhone(phone);
+                if (customPin && !/^\d{4}$/.test(customPin)) {
+                  throw new Error("رمز PIN المخصص يجب أن يتكون من 4 أرقام بالضبط");
+                }
                 setValidationError("");
                 setSaving(true);
                 await onSave({
@@ -2406,12 +3358,16 @@ function MemberWizard({
                   name: normalizedMemberName,
                   height,
                   weight,
-                  createdAt: initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
+                  createdAt: createdAt.trim() || initial?.createdAt || new Date().toLocaleDateString("ar-IQ"),
+                  ...(expiresAt.trim() ? { expiresAt: expiresAt.trim() } : {}),
+                  ...(courseName.trim() ? { courseName: courseName.trim() } : {}),
+                  ...(notes.trim() ? { notes: notes.trim() } : {}),
                   phoneE164: normalizedMemberPhone,
                   phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
                   days: cloneDays(selected.slice(0, days)),
                   active,
                   ...(authUid.trim() ? { authUid: authUid.trim() } : {}),
+                  ...(customPin ? { customPin } : {}),
                 });
               } catch (error) {
                 setValidationError(error instanceof Error ? error.message : "بيانات المشترك غير صالحة");
@@ -2447,8 +3403,9 @@ function MemberPortal({
   const [day, setDay] = useState(0);
   const [done, setDone] = useState<string[]>([]);
   const list = m.days[day] || [];
+  const dayMuscles = [...new Set(list.map((e) => e.muscle))].filter(Boolean).join(" + ");
   return (
-    <main className="member-portal">
+    <main className="member-portal" dir="rtl">
       <div className="portal-head">
         <Logo s={s} />
         <span>بوابة المشترك</span>
@@ -2460,20 +3417,27 @@ function MemberPortal({
         <div>
           <span className="status active">
             <i />
-            عضوية نشطة
+            {m.active === false ? "عضوية غير فعالة" : "عضوية نشطة"}
           </span>
           <h1>{m.name}</h1>
+          {m.courseName && <p style={{ margin: "4px 0 8px", color: "var(--accent)", fontWeight: 700 }}>{m.courseName}</p>}
           <div className="member-profile-facts" aria-label="بيانات المشترك">
             <span><b>رقم العضوية</b>{m.membershipId || "—"}</span>
             <span><b>الطول</b>{m.height || "—"} سم</span>
             <span><b>الوزن</b>{m.weight || "—"} كغم</span>
+            {m.createdAt && <span><b>تاريخ الاشتراك</b>{m.createdAt}</span>}
+            {m.expiresAt && <span><b>تاريخ الانتهاء</b>{m.expiresAt}</span>}
           </div>
+          {m.notes && <p style={{ marginTop: 10, color: "var(--muted)" }}>ملاحظات الكابتن: {m.notes}</p>}
         </div>
       </section>
       {m.days.length ? (
         <section className="panel portal-workout">
           <div className="portal-workout-head">
-            <div><h2>خطة التمرين</h2><p>اختر اليوم ثم افتح شرح أي تمرين عند الحاجة.</p></div>
+            <div>
+              <h2>خطة التمرين {dayMuscles ? `— ${dayMuscles}` : ""}</h2>
+              <p>اختر اليوم ثم افتح شرح أي تمرين أو امسح رمز QR الخاص به.</p>
+            </div>
             <span className="availability-badge">{list.length} تمارين اليوم</span>
           </div>
           <div className="day-tabs" role="tablist" aria-label="أيام التدريب">
@@ -2490,16 +3454,33 @@ function MemberPortal({
               </button>
             ))}
           </div>
-          {list.map((e) => (
-            <article className="portal-exercise-card" key={e.id}>
+          {list.map((e, idx) => (
+            <article className="portal-exercise-card" key={`${e.id}-${idx}`}>
               <div className="portal-exercise-topline">
                 <button aria-label={`تحديد ${e.name}`} className={done.includes(e.id) ? "check-btn done" : "check-btn"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>
                   {done.includes(e.id) && <Check size={15} />}
                 </button>
-                <div className="portal-exercise-title"><h3>{e.name}</h3><span>{e.muscle}</span></div>
+                <div className="portal-exercise-title">
+                  <h3>{idx + 1}. {e.name}</h3>
+                  <span>{e.muscle}</span>
+                </div>
               </div>
+              {e.image && (
+                <div style={{ margin: "8px 0" }}>
+                  <img src={e.image} alt={e.name} style={{ maxHeight: 160, borderRadius: 8, objectFit: "cover" }} />
+                </div>
+              )}
+              {(e.description || e.notes) && (
+                <p style={{ margin: "6px 0", color: "var(--muted)", fontSize: 13 }}>
+                  {e.notes ? <strong>ملاحظة: {e.notes} · </strong> : null}
+                  {e.description}
+                </p>
+              )}
               <div className="portal-exercise-stats" aria-label="تفاصيل التمرين">
-                <span><b>المجاميع</b>{e.sets}</span><span><b>التكرارات</b>{e.reps}</span><span><b>الراحة</b>{e.rest || "—"}</span><span><b>الوزن</b>{e.weight || "—"}</span>
+                <span><b>المجاميع</b>{e.sets}</span>
+                <span><b>التكرارات</b>{e.reps}</span>
+                <span><b>الراحة</b>{e.rest || "—"}</span>
+                <span><b>الوزن</b>{e.weight || "—"}</span>
               </div>
               <a className="portal-exercise-link" href={exerciseUrl(e.id)} target="_blank" rel="noopener noreferrer" aria-label={`فتح شرح التمرين: ${e.name}`}>
                 <QRCodeSVG value={exerciseUrl(e.id)} size={56} includeMargin level="M" />
@@ -2529,16 +3510,16 @@ function ExerciseDetail({
 }) {
   const video = safeVideoUrl(exercise?.video);
   return (
-    <main className="exercise-detail-page">
+    <main className="exercise-detail-page" dir="rtl">
       <Logo s={s} />
       <section className="panel exercise-detail-card">
         {exercise ? (
           <>
             <div className="exercise-thumb big">
-              <Dumbbell size={34} />
+              {exercise.image ? <img src={exercise.image} alt={exercise.name} className="exercise-card-img" /> : <Dumbbell size={34} />}
             </div>
             <h1>{exercise.name}</h1>
-            <p>{exercise.english || "شرح التمرين"}</p>
+            <p>{exercise.description || exercise.english || "شرح التمرين"}</p>
             <div className="detail-grid">
               <span>
                 المجموعات<strong>{exercise.sets}</strong>
@@ -2560,7 +3541,7 @@ function ExerciseDetail({
                 فتح فيديو الشرح <ExternalLink size={15} />
               </a>
             ) : (
-              <span className="availability-badge">الشرح غير متوفر</span>
+              <span className="availability-badge">الشرح النصي متوفر أعلاه</span>
             )}
           </>
         ) : (
@@ -2581,19 +3562,23 @@ function PublicExerciseDetail({
   exerciseId: string;
   fallback?: Exercise;
 }) {
-  const [exercise, setExercise] = useState<Exercise | undefined>(fallback);
-  const [loading, setLoading] = useState(!fallback);
+  const defaultFallback =
+    fallback ||
+    seedExercises.find((e) => e.id === exerciseId) ||
+    suggestedExercises.find((e) => e.id === exerciseId);
+  const [exercise, setExercise] = useState<Exercise | undefined>(defaultFallback);
+  const [loading, setLoading] = useState(!defaultFallback);
   useEffect(
     () =>
       watchPublicExercise<Exercise>(exerciseId, (value) => {
-        setExercise(value || undefined);
+        setExercise(value || defaultFallback || undefined);
         setLoading(false);
       }),
     [exerciseId],
   );
   const video = safeVideoUrl(exercise?.video);
   return (
-    <main className="exercise-detail-page">
+    <main className="exercise-detail-page" dir="rtl">
       <div className="public-exercise-brand">
         <div className="brand-mark" style={{ background: defaults.accent }}>
           <Dumbbell size={19} />
@@ -2604,10 +3589,12 @@ function PublicExerciseDetail({
         {exercise ? (
           <>
             <div className="exercise-thumb big">
-              <Dumbbell size={34} />
+              {exercise.image ? <img src={exercise.image} alt={exercise.name} className="exercise-card-img" /> : <Dumbbell size={34} />}
             </div>
+            <span className="availability-badge">{exercise.muscle}</span>
             <h1>{exercise.name}</h1>
-            <p>{exercise.english || "شرح التمرين"}</p>
+            {exercise.english && <p dir="ltr">{exercise.english}</p>}
+            {exercise.description && <p>{exercise.description}</p>}
             <div className="detail-grid">
               <span>
                 المجموعات<strong>{exercise.sets}</strong>
@@ -2630,7 +3617,7 @@ function PublicExerciseDetail({
               </a>
             ) : (
               <span className="availability-badge">
-                لم تتم إضافة رابط فيديو بعد
+                بطاقة التمرين المعتمدة — AL ASAS FIT
               </span>
             )}
           </>
@@ -2641,6 +3628,74 @@ function PublicExerciseDetail({
             icon={<Dumbbell size={28} />}
             title="التمرين غير موجود"
             text="قد يكون الرابط قديماً أو لم تتم مزامنته بعد."
+          />
+        )}
+      </section>
+    </main>
+  );
+}
+function PublicCourseDetail({
+  courseId,
+  fallback,
+}: {
+  courseId: string;
+  fallback?: ReadyCourse;
+}) {
+  const [course, setCourse] = useState<ReadyCourse | undefined>(fallback);
+  const [loading, setLoading] = useState(!fallback);
+  useEffect(
+    () =>
+      watchPublicCourse<ReadyCourse>(courseId, (value) => {
+        setCourse(value || fallback || undefined);
+        setLoading(false);
+      }),
+    [courseId],
+  );
+  return (
+    <main className="exercise-detail-page" dir="rtl">
+      <div className="public-exercise-brand">
+        <div className="brand-mark" style={{ background: defaults.accent }}>
+          <Dumbbell size={19} />
+        </div>
+        <strong>AL ASAS FIT</strong>
+      </div>
+      <section className="panel exercise-detail-card" style={{ maxWidth: 680, width: "100%", textAlign: "right" }}>
+        {course ? (
+          <>
+            <h1>{course.name}</h1>
+            <p>{course.days.length} أيام تدريب{course.notes ? ` · ${course.notes}` : ""}</p>
+            {course.days.map((day, idx) => (
+              <div key={idx} className="ready-day" style={{ marginTop: 12 }}>
+                <h4>
+                  اليوم {idx + 1}{" "}
+                  <small>{[...new Set(day.map((e) => e.muscle))].join(" + ") || "—"}</small>
+                </h4>
+                {day.length ? (
+                  day.map((e, n) => (
+                    <div className="ready-exercise" key={`${e.id}-${n}`}>
+                      <span>{n + 1}</span>
+                      <b>
+                        <a href={exerciseUrl(e.id)} style={{ color: "inherit", textDecoration: "underline" }}>
+                          {e.name}
+                        </a>
+                        {e.notes ? ` (${e.notes})` : ""}
+                      </b>
+                      <strong>{e.sets} × {e.reps}{e.weight ? ` · ${e.weight}` : ""}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <em>لا توجد تمارين لهذا اليوم</em>
+                )}
+              </div>
+            ))}
+          </>
+        ) : loading ? (
+          <p>جارٍ تحميل بيانات الكورس…</p>
+        ) : (
+          <Empty
+            icon={<FileText size={28} />}
+            title="الكورس غير موجود"
+            text="تحقق من رابط QR الكورس أو أعد حفظ الكورس لمزامنته."
           />
         )}
       </section>
@@ -2957,28 +4012,51 @@ function Modal({
     </div>
   );
 }
-function printMemberLegacy(m: Member, s: SettingsData) {
-  const qrMarkup = (e: MemberExercise) => {
-    const target = exerciseTarget(e);
-    return target
-      ? `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={target} size={58} includeMargin level="M" />)}</div>`
-      : '<span class="qr-empty">الشرح غير متوفر</span>';
-  };
-  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff}header{display:grid;grid-template-columns:72px 1fr 1fr;gap:12px;align-items:center;border-bottom:3px solid #b7ff2a;padding-bottom:12px;margin-bottom:14px}header img{max-height:58px;max-width:120px;object-fit:contain}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:14px 0 6px;border-bottom:1px solid #ddd;padding-bottom:5px}.meta{font-size:10px;color:#525960}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin:8px 0}.exercise-head,.exercise{display:grid;grid-template-columns:20px 1fr 90px 60px 66px;gap:6px;align-items:center}.exercise-head{font-weight:700;color:#525960;font-size:9px;padding:3px 0 6px;border-bottom:1px solid #ddd}.exercise{border-bottom:1px solid #eee;padding:7px 0;font-size:10px}.exercise:last-child{border:0}.exercise small{display:block;color:#525960}.qr{width:58px;height:58px;background:#fff;padding:4px;display:grid;place-items:center}.qr svg{width:50px;height:50px}.qr-empty{font-size:8px;color:#777;text-align:center}.footer{margin-top:15px;border-top:1px solid #ddd;padding-top:8px;font-size:9px;color:#525960;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}section{break-inside:avoid}</style></head><body><header><div></div><div><h1>${escapeHtml(m.name)}</h1><div class="meta">${s.showHeight ? `${escapeHtml(m.height || "—")} سم · ` : ""}${s.showWeight ? `${escapeHtml(m.weight || "—")} كغم` : ""}${s.showDate ? ` · ${escapeHtml(m.createdAt)}` : ""}</div></div><div><strong>${escapeHtml(s.gymName)}</strong>${s.logo ? `<br><img src="${s.logo}" alt="شعار القاعة">` : ""}<div class="meta">${escapeHtml(s.coachName)}</div></div></header>${m.days.map((day, i) => `<section class="day"><h2>اليوم ${i + 1}</h2>${day.length ? `<div class="exercise-head"><span>م</span><span>التمرين</span><span>المجاميع × التكرارات</span><span>الراحة</span><span>QR</span></div>${day.map((e, n) => `<div class="exercise"><b>${n + 1}</b><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></div><span>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</span><span>${escapeHtml(e.rest || "—")}</span>${qrMarkup(e)}</div>`).join("")}` : '<div class="meta">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<div class="footer"><span>${escapeHtml(s.phone)}</span><span>${escapeHtml(s.instagram)}</span><span>${escapeHtml(s.address)}</span></div><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
-  const w = window.open("", "_blank");
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
-}
-function printMember(m: Member, s: SettingsData) {
+function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
   const qrMarkup = (e: MemberExercise) => `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div>`;
-  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="num">${n + 1}</td><td class="exercise-name"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}</small></td><td>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
+  const courseQrMarkup = `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={courseUrl(`member-${m.id}`)} size={62} includeMargin level="M" />)}</div>`;
+  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="num">${n + 1}</td><td class="exercise-name"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
-  const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl}.coach img{width:39mm;height:39mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:14px;line-height:1.9;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{width:52mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 2mm;font-size:16px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong></div><div class="member">${s.showDate ? `<div><b>التاريخ:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${m.days.map((day, i) => `<section class="day"><h2 class="day-title">اليوم ${i + 1}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span>${footerNote ? `<span>${footerNote}</span>` : ""}</footer><script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script></body></html>`;
+  const memberNotes = escapeHtml(m.notes || "");
+  return `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
+    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:36mm;height:36mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.course-qr svg{width:16mm;height:16mm}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:13px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}${courseQrMarkup}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
+    const dayMuscles = [...new Set(day.map((e) => e.muscle))].filter(Boolean).join(" + ");
+    return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
+  }).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span>${footerNote ? `<span>${footerNote}</span>` : ""}</footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
+}
+function PrintPreviewModal({
+  member,
+  settings,
+  onClose,
+}: {
+  member: Member;
+  settings: SettingsData;
+  onClose: () => void;
+}) {
+  const html = buildPrintMemberHtml(member, settings, false);
+  return (
+    <Modal title={`معاينة طباعة A4 — ${member.name}`} onClose={onClose} wide>
+      <div className="print-preview-modal-body">
+        <iframe
+          title={`معاينة طباعة ${member.name}`}
+          className="print-preview-frame"
+          srcDoc={html}
+        />
+        <div className="modal-actions">
+          <Button secondary onClick={onClose}>إغلاق</Button>
+          <Button onClick={() => printMember(member, settings)} icon={<Printer size={16} />}>
+            طباعة A4 الآن
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function printMember(m: Member, s: SettingsData) {
+  const html = buildPrintMemberHtml(m, s, true);
   const w = window.open("", "_blank");
   if (!w) return;
   w.document.write(html);
@@ -3031,18 +4109,31 @@ class UiErrorBoundary extends Component<
     );
   }
 }
-const adminRoute = window.location.pathname.replace(/\/+$/, "").endsWith("/admin");
-const exerciseRoute = /^#\/exercise\/[^/]+/.test(window.location.hash);
+function RootRouter() {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const adminRoute = window.location.pathname.replace(/\/+$/, "").endsWith("/admin");
+  if (hash.startsWith("#/exercise/")) {
+    const id = decodeURIComponent(hash.slice(11));
+    return <PublicExerciseDetail exerciseId={id} />;
+  }
+  if (hash.startsWith("#/course/")) {
+    const id = decodeURIComponent(hash.slice(9));
+    return <PublicCourseDetail courseId={id} />;
+  }
+  if (adminRoute) {
+    return <AdminGate />;
+  }
+  return <MemberPinGate />;
+}
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <UiErrorBoundary>
-      {adminRoute ? (
-        <AdminGate />
-      ) : location.hash.startsWith("#/exercise/") ? (
-        <App role="MANAGER" onSignOut={() => {}} />
-      ) : (
-        <MemberPinGate />
-      )}
+      <RootRouter />
     </UiErrorBoundary>
   </StrictMode>,
 );

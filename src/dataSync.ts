@@ -33,12 +33,13 @@ export function firebaseSyncError(
   return new FirebaseSyncError(phase, code || "UNKNOWN", message);
 }
 
-export type SyncPayload<TSettings, TExercise, TMember, TCourse> = {
+export type SyncPayload<TSettings, TExercise, TMember, TCourse, TCategory = unknown> = {
   schemaVersion: 1;
   settings: TSettings;
   exercises: TExercise[];
   members: TMember[];
   courses: TCourse[];
+  categories?: TCategory[];
   migratedAt?: string;
 };
 
@@ -250,6 +251,7 @@ export async function writeAdminData<T>(
     exercises?: unknown;
     members?: unknown;
     courses?: unknown;
+    categories?: unknown;
     migratedAt?: unknown;
   };
   const previous = (options.previous && typeof options.previous === "object"
@@ -260,12 +262,13 @@ export async function writeAdminData<T>(
     exercises?: unknown;
     members?: unknown;
     courses?: unknown;
+    categories?: unknown;
     migratedAt?: unknown;
   } | null;
   const updates: Record<string, unknown> = {};
   const same = (left: unknown, right: unknown) =>
     JSON.stringify(stripUndefined(left)) === JSON.stringify(stripUndefined(right));
-  const arrayUpdates = (key: "exercises" | "members" | "courses") => {
+  const arrayUpdates = (key: "exercises" | "members" | "courses" | "categories") => {
     const next = appData[key];
     if (!Array.isArray(next)) return;
     const old = previous?.[key];
@@ -293,6 +296,7 @@ export async function writeAdminData<T>(
   };
   arrayUpdates("exercises");
   arrayUpdates("courses");
+  arrayUpdates("categories");
 
   const nextMembers = Array.isArray(appData.members) ? appData.members as Array<Record<string, unknown>> : [];
   const oldMembers = Array.isArray(previous?.members) ? previous.members as Array<Record<string, unknown>> : [];
@@ -347,6 +351,8 @@ export async function writeAdminData<T>(
     const video = safeVideoUrl(exercise.video);
     if (exercise.video !== undefined && exercise.video !== "" && !video)
       throw new Error("رابط فيديو غير آمن أو غير معتمد");
+    const description = typeof exercise.description === "string" ? exercise.description.trim().slice(0, 1000) : "";
+    const image = typeof exercise.image === "string" ? exercise.image.trim().slice(0, 512) : "";
     return stripUndefined({
       id: exercise.id,
       name: exercise.name,
@@ -356,6 +362,8 @@ export async function writeAdminData<T>(
       reps: exercise.reps,
       rest: exercise.rest,
       video: video || "",
+      ...(description ? { description } : {}),
+      ...(image ? { image } : {}),
     }) as Record<string, unknown>;
   };
   const nextExercises = Array.isArray(appData.exercises)
@@ -376,8 +384,59 @@ export async function writeAdminData<T>(
     const old = oldPublic.get(id);
     if (same(next, old)) continue;
     const projection = next || old;
-    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video"])
-      updates[`publicExercises/${id}/${field}`] = next ? projection?.[field] : null;
+    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "description", "image"])
+      updates[`publicExercises/${id}/${field}`] = next ? (projection?.[field] ?? null) : null;
+  }
+
+  const nextCourses = Array.isArray(appData.courses)
+    ? (appData.courses as Array<Record<string, unknown>>)
+    : [];
+  const oldCourses = Array.isArray(previous?.courses)
+    ? (previous.courses as Array<Record<string, unknown>>)
+    : [];
+  const toPublicCourse = (course: Record<string, unknown>) =>
+    stripUndefined({
+      id: String(course.id || ""),
+      name: String(course.name || "كورس تدريبي"),
+      notes: typeof course.notes === "string" ? course.notes.slice(0, 1000) : "",
+      days: Array.isArray(course.days) ? course.days : [],
+    });
+  const nextPublicCourses = new Map<string, Record<string, unknown>>();
+  for (const c of nextCourses) {
+    if (c && typeof c.id === "string" && c.id) nextPublicCourses.set(c.id, toPublicCourse(c));
+  }
+  for (const m of nextMembers) {
+    if (m && typeof m.id === "string" && m.id) {
+      const cid = `member-${m.id}`;
+      nextPublicCourses.set(cid, stripUndefined({
+        id: cid,
+        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
+        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        days: Array.isArray(m.days) ? m.days : [],
+      }));
+    }
+  }
+  const oldPublicCourses = new Map<string, Record<string, unknown>>();
+  for (const c of oldCourses) {
+    if (c && typeof c.id === "string" && c.id) oldPublicCourses.set(c.id, toPublicCourse(c));
+  }
+  for (const m of oldMembers) {
+    if (m && typeof m.id === "string" && m.id) {
+      const cid = `member-${m.id}`;
+      oldPublicCourses.set(cid, stripUndefined({
+        id: cid,
+        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
+        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        days: Array.isArray(m.days) ? m.days : [],
+      }));
+    }
+  }
+  const publicCourseIds = new Set([...nextPublicCourses.keys(), ...oldPublicCourses.keys()]);
+  for (const cid of publicCourseIds) {
+    const next = nextPublicCourses.get(cid);
+    const old = oldPublicCourses.get(cid);
+    if (same(next, old)) continue;
+    updates[`publicCourses/${cid}`] = next || null;
   }
 
   const profile = (member: Record<string, unknown>) =>
@@ -424,6 +483,22 @@ export function watchPublicExercise<T>(
   }
   return onValue(
     ref(firebaseDatabase, `publicExercises/${exerciseId}`),
+    (snapshot) => {
+      callback(snapshot.exists() ? (snapshot.val() as T) : null);
+    },
+  );
+}
+
+export function watchPublicCourse<T>(
+  courseId: string,
+  callback: (value: T | null) => void,
+): Unsubscribe | (() => undefined) {
+  if (!firebaseDatabase) {
+    callback(null);
+    return () => undefined;
+  }
+  return onValue(
+    ref(firebaseDatabase, `publicCourses/${courseId}`),
     (snapshot) => {
       callback(snapshot.exists() ? (snapshot.val() as T) : null);
     },

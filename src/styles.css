@@ -217,3 +217,49 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .portal-exercise-link svg{max-width:100%;height:auto;flex:0 0 auto}
 .danger-btn{color:#9b3d32!important;border-color:#e4b5ae!important;background:#fff7f5!important}
 @media(max-width:700px){.member-portal{padding:18px 12px}.member-hero{margin-top:22px;padding:18px}.member-hero h1{font-size:22px}.member-profile-facts{gap:7px}.member-profile-facts span{flex:1;min-width:90px}.portal-workout{padding:18px}.portal-workout-head{align-items:flex-start;flex-direction:column}.portal-exercise-card{grid-template-columns:1fr;gap:12px;padding:16px 0}.portal-exercise-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.portal-exercise-stats span{padding:7px 4px;font-size:10px}.portal-exercise-link{justify-self:stretch;min-height:62px}.day-tabs{width:100%;padding-bottom:4px}.day-tabs button{flex:1;min-width:0}}
+
+
+/* Captain PIN Eye controls, Category CRUD, Course Notes/Ordering, Filter Bar, Audit Log & Print Preview */
+.pin-input-wrap{position:relative;display:flex;align-items:center}
+.pin-input-wrap input{padding-left:44px!important}
+.pin-eye-toggle{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:8px;background:transparent;color:#525960;display:grid;place-items:center}
+.pin-eye-toggle:hover,.pin-eye-toggle:focus-visible{background:#f0f4e8;color:#1e1f1e}
+.pin-cell-controls{display:inline-flex;align-items:center;gap:6px;background:#f8faf5;border:1px solid #dfe6d5;border-radius:9px;padding:4px 8px}
+.pin-mask-code{font-family:monospace;font-size:13px;font-weight:700;letter-spacing:2px;color:#525960;min-width:44px;text-align:center;padding:2px 4px;border-radius:5px}
+.pin-mask-code.revealed{background:#eafaaf;color:#161d0f;letter-spacing:3px}
+.pin-action-icon{width:28px;height:28px;border-radius:6px;background:#fff;border:1px solid #d8dfd2;color:#3b4338;display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:0 5px;min-width:28px;width:auto}
+.pin-action-icon:hover:not(:disabled),.pin-action-icon:focus-visible{background:#eafaaf;border-color:#98c92b;color:#161d0f}
+.pin-action-icon:disabled{opacity:.45;cursor:not-allowed}
+.pin-copied-badge{font-size:9px;font-weight:700;color:#2f5209;white-space:nowrap}
+.members-filter-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 18px;margin-bottom:16px;flex-wrap:wrap}
+.members-filter-bar .barcode-search{margin-bottom:0;flex:1;min-width:220px}
+.filter-pills{display:flex;gap:6px;flex-wrap:wrap}
+.filter-pills button{padding:7px 12px;border-radius:8px;border:1px solid #d8dfd2;background:#fff;color:#525960;font-size:11px;font-weight:600}
+.filter-pills button.active{background:rgba(183,255,42,.24);border-color:#8fcf1a;color:#1e1f1e}
+.category-row-item{display:flex;align-items:center;gap:4px;margin-bottom:4px}
+.category-row-item>button:first-child{flex:1;min-width:0}
+.category-mini-actions{display:inline-flex;gap:2px;flex:0 0 auto}
+.category-mini-actions .row-icon{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:#6b7280}
+.category-mini-actions .row-icon:hover:not(:disabled){background:#eef5df;color:#2c4709}
+.category-mini-actions .row-icon:disabled{opacity:.3;cursor:not-allowed}
+.exercise-card-img{width:100%;height:100%;object-fit:cover;display:block}
+.full-width-field{display:flex;flex-direction:column;gap:6px;font-size:10px;color:#525960;margin-top:12px;grid-column:1/-1}
+.full-width-field input,.full-width-field textarea,.form-grid select{background:#fff;border:1px solid #d1d5db;border-radius:7px;padding:8px 10px;color:#1e1f1e;font:inherit;outline:0}
+.form-grid select{height:38px}
+.selected-exercises>.selected-exercise-row{grid-template-columns:minmax(130px,1.4fr) repeat(5,minmax(64px,1fr)) auto;gap:8px}
+.exercise-order-actions{display:inline-flex;align-items:center;gap:4px}
+.exercise-order-actions .row-icon{width:26px;height:26px;border:1px solid #d8dfd2;border-radius:6px;background:#fff;display:grid;place-items:center}
+.audit-mini-box{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+.audit-mini-box h3{font-size:12px;margin:0 0 8px;color:var(--text)}
+.audit-mini-box ul{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.audit-mini-box li{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;padding:6px 8px;background:#f8faf5;border:1px solid #e5ebd9;border-radius:7px}
+.audit-mini-box li b{color:#2f4d0c}
+.audit-mini-box li small{color:#6b7280}
+.print-preview-modal-body{display:grid;gap:14px}
+.print-preview-frame{width:100%;height:min(68vh,640px);border:1px solid #d1d5db;border-radius:10px;background:#fff}
+.search-top input{border:0;outline:0;background:transparent;width:100%;color:var(--text);font:inherit;font-size:11px}
+@media(max-width:700px){
+  .selected-exercises>.selected-exercise-row{grid-template-columns:1fr 1fr;gap:8px}
+  .selected-exercises>.selected-exercise-row>div:first-child{grid-column:1/-1}
+  .category-mini-actions{display:none}
+}

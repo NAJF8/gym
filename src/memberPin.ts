@@ -8,10 +8,24 @@ export type MemberPinProfile = {
   height: string
   weight: string
   createdAt: string
+  expiresAt?: string
+  courseName?: string
+  notes?: string
   photo?: string
   days: Array<Array<Record<string, unknown>>>
   active?: boolean
   phone?: string
+  phoneDisplay?: string
+  phoneE164?: string
+}
+
+export type PinAuditLogEntry = {
+  id: string
+  action: string
+  actorUid: string
+  memberId: string
+  credentialVersion: number | null
+  createdAt: number
 }
 
 // The Worker contract is versioned and identical across environments.
@@ -40,21 +54,53 @@ async function request<T>(path: string, init: RequestInit = {}) {
     headers: { 'content-type': 'application/json', ...(init.headers || {}) },
   })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'تعذر الاتصال بخدمة PIN الموثوقة')
+  if (!response.ok) {
+    if (response.status === 429 && path === '/v1/member/login') {
+      throw new Error('تم حظر المحاولات مؤقتاً لمدة 15 دقيقة بسبب تكرار المحاولات الخاطئة. يرجى الانتظار أو مراجعة الكابتن.')
+    }
+    if (response.status === 403 && body?.reason === 'MEMBER_INACTIVE') {
+      throw new Error('العضوية غير فعالة حالياً، يرجى مراجعة إدارة الجيم.')
+    }
+    throw new Error(typeof body.error === 'string' ? body.error : 'تعذر الاتصال بخدمة PIN الموثوقة')
+  }
   return body as T
 }
 
-export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = false) {
-  const normalizedPhone = normalizeIraqiPhone(phone)
+export async function revealMemberPin(memberId: string, candidatePin?: string) {
   const token = await requireFreshAdminToken()
-  const result = await request<{ pin: string | null; existing?: boolean; credentialVersion?: number }>('/v1/admin/member-pin', {
+  const result = await request<{ pin: string; credentialVersion?: number; source?: string }>('/v1/admin/member-pin-reveal', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
-    body: JSON.stringify({ memberId, membershipId, phone: normalizedPhone, reset }),
+    body: JSON.stringify({ memberId, ...(candidatePin ? { candidatePin } : {}) }),
   })
-  if (result.existing || result.pin === null) throw new Error('يوجد PIN ثابت لهذا المشترك. استخدم إعادة تعيين PIN لإصدار رمز جديد؛ لا يمكن كشف الرمز القديم لأنه محفوظ كـHash فقط.')
   if (!/^\d{4}$/.test(result.pin)) throw new Error('الخدمة أعادت PIN غير صالح')
   return result.pin
+}
+
+export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = false, customPin?: string) {
+  const normalizedPhone = normalizeIraqiPhone(phone)
+  const token = await requireFreshAdminToken()
+  const result = await request<{ pin: string | null; existing?: boolean; hasCipher?: boolean; credentialVersion?: number }>('/v1/admin/member-pin', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ memberId, membershipId, phone: normalizedPhone, reset, ...(customPin ? { customPin } : {}) }),
+  })
+  if (result.existing || result.pin === null) {
+    if (result.hasCipher) return await revealMemberPin(memberId)
+    throw new Error('يوجد PIN ثابت لهذا المشترك. استخدم إعادة تعيين PIN لإصدار رمز جديد؛ لا يمكن كشف الرمز القديم لأنه محفوظ كـHash فقط.')
+  }
+  if (!/^\d{4}$/.test(result.pin)) throw new Error('الخدمة أعادت PIN غير صالح')
+  return result.pin
+}
+
+export async function fetchPinAuditLogs() {
+  const token = await requireFreshAdminToken()
+  const result = await request<{ logs?: PinAuditLogEntry[] }>('/v1/admin/pin-audit-logs', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({}),
+  })
+  return Array.isArray(result.logs) ? result.logs : []
 }
 
 export async function revokeMemberAccess(memberId: string) {
@@ -75,6 +121,17 @@ export async function loginMemberWithPin(phone: string, pin: string) {
   if (result.member?.active === false) throw new Error('العضوية غير فعالة')
   if (!result.sessionToken && !result.customToken) throw new Error('جلسة المشترك غير صالحة')
   return result
+}
+
+export async function fetchMemberSession(sessionToken: string) {
+  if (!sessionToken) throw new Error('جلسة المشترك غير صالحة')
+  const result = await request<{ member?: MemberPinProfile }>('/v1/member/me', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({}),
+  })
+  if (!result.member || result.member.active === false) throw new Error('جلسة المشترك منتهية أو غير صالحة')
+  return result.member
 }
 
 export async function revokeMemberSession(sessionToken: string) {
