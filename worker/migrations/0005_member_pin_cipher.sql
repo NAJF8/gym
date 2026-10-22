@@ -1,7 +1,7 @@
--- Reversible AES-256-GCM encrypted PIN envelope (keyed by PIN_PEPPER secret)
--- and audit logging for authorized admin PIN reveals.
-ALTER TABLE member_credentials ADD COLUMN pin_cipher TEXT;
-
+-- The encrypted PIN column is part of the updated initial schema so fresh
+-- databases and existing Staging databases converge on the same shape.
+-- This migration records the audit table/index without replaying an ALTER
+-- against databases that already received the column through 0000.
 CREATE TABLE IF NOT EXISTS member_pin_audit_logs (
   audit_id TEXT PRIMARY KEY,
   action TEXT NOT NULL CHECK (action IN ('PIN_ISSUED', 'PIN_RESET', 'PIN_REVEALED', 'PIN_REVOKED')),
