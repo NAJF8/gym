@@ -86,7 +86,7 @@ jobs:
           live_sha="$(node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(value.commitSha || "")' <<<"$release")"
           test "$live_sha" = "$EXPECTED_SHA"
           root_headers="$(curl --fail --silent --show-error --retry 5 --retry-all-errors -D - -o /dev/null "https://alasas-fit-staging.web.app/?verify=${GITHUB_RUN_ID}")"
-          grep -Fq 'Cache-Control: no-cache, max-age=0, must-revalidate' <<<"$root_headers"
+          grep -Fiq 'cache-control: no-cache, max-age=0, must-revalidate' <<<"$root_headers"
           index="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://alasas-fit-staging.web.app/?verify=${GITHUB_RUN_ID}")"
           css_path="$(node -e 'const fs=require("fs"); const html=fs.readFileSync(0,"utf8"); const match=html.match(/href="([^"]+\.css)"/); if (!match) process.exit(1); process.stdout.write(match[1])' <<<"$index")"
           js_path="$(node -e 'const fs=require("fs"); const html=fs.readFileSync(0,"utf8"); const match=html.match(/src="([^"]+\.js)"/); if (!match) process.exit(1); process.stdout.write(match[1])' <<<"$index")"
