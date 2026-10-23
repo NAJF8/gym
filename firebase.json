@@ -29,7 +29,16 @@
                                ],
                     "headers":  [
                                      {
-                                         "source": "**/*.html",
+                                         "source": "/index.html",
+                                         "headers": [
+                                                       {
+                                                           "key": "Cache-Control",
+                                                           "value": "no-cache, max-age=0, must-revalidate"
+                                                       }
+                                         ]
+                                     },
+                                     {
+                                         "source": "/admin/index.html",
                                          "headers": [
                                                        {
                                                            "key": "Cache-Control",
