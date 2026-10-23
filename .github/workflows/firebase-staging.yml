@@ -75,4 +75,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx -y wrangler@latest deploy --config worker/wrangler.toml
       - name: Deploy staging site
-        run: npx -y firebase-tools@latest deploy --only hosting --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}"
+        run: npx -y firebase-tools@latest deploy --only hosting:alasas-fit-staging --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}"
+      - name: Verify live Staging release
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://alasas-fit-staging.web.app/release.json?verify=${GITHUB_RUN_ID}")"
+          live_sha="$(node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(value.commitSha || "")' <<<"$release")"
+          test "$live_sha" = "$EXPECTED_SHA"
+          index="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://alasas-fit-staging.web.app/?verify=${GITHUB_RUN_ID}")"
+          css_path="$(node -e 'const fs=require("fs"); const html=fs.readFileSync(0,"utf8"); const match=html.match(/href="([^"]+\.css)"/); if (!match) process.exit(1); process.stdout.write(match[1])' <<<"$index")"
+          js_path="$(node -e 'const fs=require("fs"); const html=fs.readFileSync(0,"utf8"); const match=html.match(/src="([^"]+\.js)"/); if (!match) process.exit(1); process.stdout.write(match[1])' <<<"$index")"
+          css="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://alasas-fit-staging.web.app${css_path}?verify=${GITHUB_RUN_ID}")"
+          js="$(curl --fail --silent --show-error --retry 5 --retry-all-errors "https://alasas-fit-staging.web.app${js_path}?verify=${GITHUB_RUN_ID}")"
+          grep -Fq 'margin:0 auto 20px' <<<"$css"
+          grep -Fq 'Version 1.8.0' <<<"$js"
+          grep -Fq 'حقوق محفوظة لشركة الأساس' <<<"$js"
