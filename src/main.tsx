@@ -6,9 +6,12 @@ import {
   Activity,
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Check,
+  CheckCircle2,
   ChevronLeft,
+  CircleAlert,
   Copy,
   Dumbbell,
   ExternalLink,
@@ -22,6 +25,7 @@ import {
   Pencil,
   Plus,
   Printer,
+  Play,
   QrCode,
   RotateCcw,
   Search,
@@ -73,8 +77,9 @@ import {
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
-import { isSafeVideoUrl, safeVideoUrl } from "./videoUrl";
+import { isSafeVideoUrl, safeVideoUrl, youtubeEmbedUrl, youtubeVideoId } from "./videoUrl";
 import { safeImageUrl } from "./imageUrl";
+import { APP_VERSION } from "./release";
 import { uploadPrintImage, waitForPrintImageDeployment, type PrintImageSlot } from "./imageUpload";
 import { mergeExerciseLibrary } from "./exerciseLibrary";
 import { displayIraqiPhone, normalizeIraqiPhone } from "./phone";
@@ -1917,6 +1922,9 @@ function ExerciseModal({
         {field("image", "صورة التمرين (رابط HTTPS أو /assets/ اختياري)", "https://...")}
         {field("video", "رابط شرح الفيديو (YouTube / Vimeo اختياري)", "https://www.youtube.com/watch?v=...")}
       </div>
+      <div className="video-admin-status" aria-live="polite">
+        {youtubeVideoId(e.video) ? <><CheckCircle2 size={17} /><span><b>رابط YouTube صالح</b><small>سيظهر كفيديو مضمّن في صفحة الشرح.</small></span></> : safeVideoUrl(e.video) ? <><CircleAlert size={17} /><span><b>الرابط مقبول لكن غير موثّق كفيديو YouTube</b><small>لا تستخدم رابط نتائج بحث أو رابطاً تخمينياً.</small></span></> : <><CircleAlert size={17} /><span><b>لم تتم إضافة فيديو موثّق</b><small>يمكن حفظ التمرين بدون فيديو، وستظهر حالة واضحة للمشترك.</small></span></>}
+      </div>
       <label className="full-width-field">
         شرح التمرين وملاحظات الأداء (اختياري)
         <textarea
@@ -1947,6 +1955,9 @@ function exerciseUrl(id: string) {
 }
 function courseUrl(id: string) {
   return `${location.origin}${location.pathname.replace(/admin\/?$/, "")}#/course/${encodeURIComponent(id)}`;
+}
+function memberLoginUrl() {
+  return `${location.origin}${location.pathname.replace(/admin\/?$/, "")}`;
 }
 function exerciseTarget(exercise: Exercise) {
   return exerciseUrl(exercise.id);
@@ -2074,7 +2085,7 @@ function Barcodes({
                   key={e.id}
                 >
                   {e.name}
-                  <small>{e.video ? "فيديو مرتبط" : "صفحة شرح التمرين"}</small>
+                  <small>{youtubeVideoId(e.video) ? "YouTube موثّق" : "UNVERIFIED — لا يوجد فيديو موثّق"}</small>
                 </button>
               ))}
             </>
@@ -2102,10 +2113,11 @@ function Barcodes({
               </div>
               <h2>{selected.name}</h2>
               <p>
-                {selected.description || (selected.video
-                  ? "رابط الفيديو الحالي محفوظ"
-                  : "أضف رابط فيديو أو شرح من تعديل التمرين")}
+                {selected.description || (youtubeVideoId(selected.video)
+                  ? "رابط YouTube صالح للحفظ والمعاينة"
+                  : "UNVERIFIED: أضف رابط فيديو YouTube محدداً بعد التحقق من مطابقته للتمرين")}
               </p>
+              <span className={youtubeVideoId(selected.video) ? "availability-badge video-status verified" : "availability-badge video-status"}>{youtubeVideoId(selected.video) ? "حالة التحقق: VERIFIED" : "حالة التحقق: UNVERIFIED"}</span>
               <div className="qr-box">
                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
               </div>
@@ -3404,102 +3416,113 @@ function MemberPortal({
   const [done, setDone] = useState<string[]>([]);
   const list = m.days[day] || [];
   const dayMuscles = [...new Set(list.map((e) => e.muscle))].filter(Boolean).join(" + ");
+  const instagramUrl = socialUrl("instagram", s.instagram);
+  const whatsappUrl = socialUrl("whatsapp", s.whatsapp || s.phone);
   return (
     <main className="member-portal" dir="rtl">
-      <div className="portal-head">
-        <Logo s={s} />
-        <span>بوابة المشترك</span>
-        <button className="text-btn" onClick={onSignOut}>
-          تسجيل الخروج
-        </button>
-      </div>
-      <section className="member-hero">
-        <div>
-          <span className="status active">
-            <i />
-            {m.active === false ? "عضوية غير فعالة" : "عضوية نشطة"}
-          </span>
-          <h1>{m.name}</h1>
-          {m.courseName && <p style={{ margin: "4px 0 8px", color: "var(--accent)", fontWeight: 700 }}>{m.courseName}</p>}
-          <div className="member-profile-facts" aria-label="بيانات المشترك">
-            <span><b>رقم العضوية</b>{m.membershipId || "—"}</span>
-            <span><b>الطول</b>{m.height || "—"} سم</span>
-            <span><b>الوزن</b>{m.weight || "—"} كغم</span>
-            {m.createdAt && <span><b>تاريخ الاشتراك</b>{m.createdAt}</span>}
-            {m.expiresAt && <span><b>تاريخ الانتهاء</b>{m.expiresAt}</span>}
+      <div className="member-portal-inner">
+        <header className="member-portal-header">
+          <Logo s={s} />
+          <div className="member-portal-heading">
+            <span>بوابة المشترك</span>
+            <h1>جدول تماريني</h1>
           </div>
-          {m.notes && <p style={{ marginTop: 10, color: "var(--muted)" }}>ملاحظات الكابتن: {m.notes}</p>}
-        </div>
-      </section>
-      {m.days.length ? (
-        <section className="panel portal-workout">
-          <div className="portal-workout-head">
-            <div>
-              <h2>خطة التمرين {dayMuscles ? `— ${dayMuscles}` : ""}</h2>
-              <p>اختر اليوم ثم افتح شرح أي تمرين أو امسح رمز QR الخاص به.</p>
+          <button className="member-logout" onClick={onSignOut}><LogOut size={17} /> تسجيل الخروج</button>
+        </header>
+
+        <section className="member-welcome" aria-labelledby="member-welcome-title">
+          <div>
+            <span className={m.active === false ? "member-status inactive" : "member-status"}>
+              <i aria-hidden="true" /> {m.active === false ? "عضوية غير فعالة" : "عضوية نشطة"}
+            </span>
+            <h2 id="member-welcome-title">أهلاً {m.name}</h2>
+            <p>{m.courseName || "خطتك التدريبية الشخصية"}</p>
+          </div>
+          <div className="member-welcome-mark" aria-hidden="true"><Dumbbell size={28} /></div>
+        </section>
+
+        <section className="member-info-card" aria-labelledby="member-info-title">
+          <div className="member-section-heading"><div><span className="section-kicker">ملفك</span><h2 id="member-info-title">بيانات المشترك</h2></div><span className="member-id-badge" dir="ltr">{m.membershipId || m.id}</span></div>
+          <div className="member-info-grid">
+            <MemberFact label="الاسم الكامل" value={m.name} />
+            <MemberFact label="رقم العضوية" value={m.membershipId || "—"} />
+            <MemberFact label="الطول" value={m.height ? `${m.height} سم` : "—"} />
+            <MemberFact label="الوزن" value={m.weight ? `${m.weight} كغم` : "—"} />
+            <MemberFact label="تاريخ الاشتراك" value={m.createdAt || "—"} />
+            <MemberFact label="تاريخ الانتهاء" value={m.expiresAt || "غير محدد"} />
+          </div>
+          {m.notes && <div className="member-notes"><CircleAlert size={17} /><span><b>ملاحظات الكابتن</b>{m.notes}</span></div>}
+        </section>
+
+        <section className="member-course-card" aria-labelledby="member-course-title">
+          <div className="member-section-heading"><div><span className="section-kicker">الخطة الحالية</span><h2 id="member-course-title">{m.courseName || "الكورس التدريبي"}</h2></div><span className="course-status">{m.days.length} {m.days.length === 1 ? "يوم تدريب" : "أيام تدريب"}</span></div>
+          <p className="course-description">اختر يوم التدريب لعرض تمارينك وتفاصيل الأداء والراحة.</p>
+        </section>
+
+        {m.days.length ? (
+          <section className="member-workout-section" aria-labelledby="workout-title">
+            <div className="member-section-heading workout-heading"><div><span className="section-kicker">الخطة الأسبوعية</span><h2 id="workout-title">جدول تماريني</h2></div><span className="exercise-count">{list.length} تمارين اليوم</span></div>
+            <div className="member-day-tabs" role="tablist" aria-label="أيام التدريب">
+              {m.days.map((d, i) => {
+                const musclesForDay = [...new Set(d.map((e) => e.muscle))].filter(Boolean).join(" + ") || "تمارين متنوعة";
+                return <button role="tab" aria-selected={day === i} aria-controls={`member-day-panel-${i}`} className={day === i ? "active" : ""} onClick={() => setDay(i)} key={i}><strong>اليوم {i + 1}</strong><span>{musclesForDay}</span></button>;
+              })}
             </div>
-            <span className="availability-badge">{list.length} تمارين اليوم</span>
-          </div>
-          <div className="day-tabs" role="tablist" aria-label="أيام التدريب">
-            {m.days.map((d, i) => (
-              <button
-                role="tab"
-                aria-selected={day === i}
-                className={day === i ? "active" : ""}
-                onClick={() => setDay(i)}
-                key={i}
-              >
-                اليوم {i + 1}
-                <span>{d.length} تمارين</span>
-              </button>
-            ))}
-          </div>
-          {list.map((e, idx) => (
-            <article className="portal-exercise-card" key={`${e.id}-${idx}`}>
-              <div className="portal-exercise-topline">
-                <button aria-label={`تحديد ${e.name}`} className={done.includes(e.id) ? "check-btn done" : "check-btn"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>
-                  {done.includes(e.id) && <Check size={15} />}
-                </button>
-                <div className="portal-exercise-title">
-                  <h3>{idx + 1}. {e.name}</h3>
-                  <span>{e.muscle}</span>
-                </div>
+            <div id={`member-day-panel-${day}`} role="tabpanel" className="member-day-panel" aria-label={`تمارين اليوم ${day + 1}`}>
+              {dayMuscles && <div className="member-muscle-line"><span>العضلات المستهدفة</span><strong>{dayMuscles}</strong></div>}
+              <div className="member-exercise-list">
+                {list.length ? list.map((e, idx) => {
+                  const videoId = youtubeVideoId(e.video);
+                  const exerciseHref = exerciseUrl(e.id);
+                  return <article className={done.includes(e.id) ? "member-exercise-card completed" : "member-exercise-card"} key={`${e.id}-${idx}`}>
+                    <div className="exercise-card-header"><button aria-label={`تحديد إنجاز ${e.name}`} className={done.includes(e.id) ? "exercise-check checked" : "exercise-check"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>{done.includes(e.id) && <Check size={16} />}</button><div><span className="exercise-number">تمرين {idx + 1}</span><h3>{e.name}</h3><p>{e.muscle}</p></div></div>
+                    {e.image && <img className="member-exercise-image" src={e.image} alt={`صورة توضيحية لـ ${e.name}`} loading="lazy" />}
+                    {(e.description || e.notes) && <p className="member-exercise-note">{e.notes && <b>ملاحظة: </b>}{e.notes || e.description}</p>}
+                    <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /><Metric label="الوزن" value={e.weight || "—"} /><Metric label="الراحة" value={e.rest || "—"} /></div>
+                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {videoId ? "مشاهدة شرح التمرين" : "فتح بطاقة التمرين"}</a><a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a></div>
+                  </article>;
+                }) : <Empty icon={<Dumbbell size={28} />} title="لا توجد تمارين لهذا اليوم" text="يمكنك اختيار يوم آخر من الخطة." />}
               </div>
-              {e.image && (
-                <div style={{ margin: "8px 0" }}>
-                  <img src={e.image} alt={e.name} style={{ maxHeight: 160, borderRadius: 8, objectFit: "cover" }} />
-                </div>
-              )}
-              {(e.description || e.notes) && (
-                <p style={{ margin: "6px 0", color: "var(--muted)", fontSize: 13 }}>
-                  {e.notes ? <strong>ملاحظة: {e.notes} · </strong> : null}
-                  {e.description}
-                </p>
-              )}
-              <div className="portal-exercise-stats" aria-label="تفاصيل التمرين">
-                <span><b>المجاميع</b>{e.sets}</span>
-                <span><b>التكرارات</b>{e.reps}</span>
-                <span><b>الراحة</b>{e.rest || "—"}</span>
-                <span><b>الوزن</b>{e.weight || "—"}</span>
-              </div>
-              <a className="portal-exercise-link" href={exerciseUrl(e.id)} target="_blank" rel="noopener noreferrer" aria-label={`فتح شرح التمرين: ${e.name}`}>
-                <QRCodeSVG value={exerciseUrl(e.id)} size={56} includeMargin level="M" />
-                <span>فتح شرح التمرين <ExternalLink size={14}/></span>
-              </a>
-            </article>
-          ))}
-        </section>
-      ) : (
-        <section className="panel portal-workout">
-          <Empty
-            icon={<Dumbbell size={28} />}
-            title="لم يتم تعيين كورس تدريبي لحسابك بعد."
-            text="يرجى مراجعة إدارة القاعة."
-          />
-        </section>
-      )}
+            </div>
+          </section>
+        ) : <section className="member-workout-section"><Empty icon={<Dumbbell size={28} />} title="لم يتم تعيين كورس تدريبي لحسابك بعد" text="يرجى مراجعة إدارة القاعة." /></section>}
+
+        <footer className="member-portal-footer"><div className="member-social-links">{whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noreferrer" aria-label="التواصل عبر WhatsApp"><WhatsAppMark /> WhatsApp</a>}{instagramUrl && <a href={instagramUrl} target="_blank" rel="noreferrer" aria-label="فتح حساب Instagram"><InstagramMark /> Instagram</a>}</div><span>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية</span><strong>Version {APP_VERSION}</strong></footer>
+      </div>
     </main>
   );
+}
+
+function MemberFact({ label, value }: { label: string; value: string }) {
+  return <div className="member-fact"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function socialUrl(kind: "instagram" | "whatsapp", value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (kind === "instagram") {
+    if (/^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9_.-]+\/?$/i.test(raw)) return raw;
+    const handle = raw.replace(/^@/, "");
+    return /^[A-Za-z0-9_.]{1,30}$/.test(handle) ? `https://instagram.com/${handle}` : "";
+  }
+  try {
+    const phone = normalizeIraqiPhone(raw).replace(/^\+/, "");
+    return `https://wa.me/${phone}`;
+  } catch {
+    return "";
+  }
+}
+
+function InstagramMark() {
+  return <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.5" r=".8" fill="currentColor" stroke="none" /></svg>;
+}
+
+function WhatsAppMark() {
+  return <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.7 7.4L3.5 20l1.1-4.1A8.5 8.5 0 1 1 20.5 11.5Z" /><path d="M8.5 8.7c.2-.4.4-.4.7-.4h.5c.2 0 .4.1.5.4l.7 1.5c.1.2.1.4-.1.6l-.5.6c.5 1 1.3 1.8 2.4 2.3l.6-.5c.2-.2.4-.2.6-.1l1.5.7c.3.1.4.3.4.5v.5c0 .3-.1.5-.4.7-.4.3-1.2.4-2 .1-2.2-.7-4.4-2.7-5.3-4.5-.3-.7-.2-1.5.1-1.9Z" /></svg>;
 }
 function ExerciseDetail({
   s,
@@ -3577,49 +3600,18 @@ function PublicExerciseDetail({
     [exerciseId],
   );
   const video = safeVideoUrl(exercise?.video);
+  const embed = youtubeEmbedUrl(video);
   return (
     <main className="exercise-detail-page" dir="rtl">
-      <div className="public-exercise-brand">
-        <div className="brand-mark" style={{ background: defaults.accent }}>
-          <Dumbbell size={19} />
-        </div>
-        <strong>AL ASAS FIT</strong>
-      </div>
+      <header className="public-exercise-header"><Logo s={defaults} /><a className="public-login-link" href={window.location.origin + window.location.pathname}>دخول المشترك <ArrowLeft size={15} /></a></header>
       <section className="panel exercise-detail-card">
         {exercise ? (
           <>
-            <div className="exercise-thumb big">
-              {exercise.image ? <img src={exercise.image} alt={exercise.name} className="exercise-card-img" /> : <Dumbbell size={34} />}
-            </div>
-            <span className="availability-badge">{exercise.muscle}</span>
-            <h1>{exercise.name}</h1>
-            {exercise.english && <p dir="ltr">{exercise.english}</p>}
-            {exercise.description && <p>{exercise.description}</p>}
-            <div className="detail-grid">
-              <span>
-                المجموعات<strong>{exercise.sets}</strong>
-              </span>
-              <span>
-                التكرارات<strong>{exercise.reps}</strong>
-              </span>
-              <span>
-                الراحة<strong>{exercise.rest}</strong>
-              </span>
-            </div>
-            {video ? (
-              <a
-                className="primary-btn"
-                href={video}
-                target="_blank"
-                rel="noreferrer"
-              >
-                فتح فيديو الشرح <ExternalLink size={15} />
-              </a>
-            ) : (
-              <span className="availability-badge">
-                بطاقة التمرين المعتمدة — AL ASAS FIT
-              </span>
-            )}
+            <div className="exercise-detail-intro"><div className="exercise-detail-icon">{exercise.image ? <img src={exercise.image} alt={`صورة توضيحية لـ ${exercise.name}`} /> : <Dumbbell size={32} />}</div><div><span className="section-kicker">شرح التمرين</span><h1>{exercise.name}</h1><p className="exercise-muscle-label">{exercise.muscle}{exercise.english ? ` · ${exercise.english}` : ""}</p></div></div>
+            {embed ? <div className="exercise-video-frame"><iframe title={`فيديو شرح ${exercise.name}`} src={embed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> : <div className="exercise-video-unavailable" role="status"><CircleAlert size={20} /><div><strong>لا يوجد فيديو موثّق لهذا التمرين حالياً</strong><span>نعرض البيانات العامة فقط حتى تتم مراجعة رابط موثوق من الكابتن.</span></div></div>}
+            {exercise.description && <div className="exercise-instructions"><h2>تعليمات الأداء</h2><p>{exercise.description}</p></div>}
+            <div className="detail-grid"><span>المجموعات<strong>{exercise.sets}</strong></span><span>التكرارات<strong>{exercise.reps}</strong></span><span>الراحة<strong>{exercise.rest}</strong></span></div>
+            <div className="exercise-detail-actions">{video && <a className="primary-btn" href={video} target="_blank" rel="noreferrer"><ExternalLink size={15} /> المشاهدة على YouTube</a>}<button className="secondary-btn" onClick={() => window.history.length > 1 ? window.history.back() : window.location.assign(window.location.origin + window.location.pathname)}>العودة إلى الدخول <ArrowRight size={15} /></button></div>
           </>
         ) : loading ? (
           <p>جارٍ تحميل بيانات التمرين…</p>
@@ -4014,18 +4006,18 @@ function Modal({
 }
 function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
   const qrMarkup = (e: MemberExercise) => `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div>`;
-  const courseQrMarkup = `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={courseUrl(`member-${m.id}`)} size={62} includeMargin level="M" />)}</div>`;
-  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="num">${n + 1}</td><td class="exercise-name"><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td>${escapeHtml(String(e.sets))} × ${escapeHtml(e.reps)}${e.weight ? ` · ${escapeHtml(e.weight)}` : ""}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
+  const courseQrMarkup = `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={memberLoginUrl()} size={76} includeMargin level="M" />)}<strong>امسح الرمز للدخول إلى حسابك وعرض جدول تمارينك</strong></div>`;
+  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="exercise-name"><strong>${n + 1}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets))}</td><td>${escapeHtml(e.reps)}</td><td>${escapeHtml(e.weight || "—")}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
   const memberNotes = escapeHtml(m.notes || "");
-  return `<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:36mm;height:36mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.course-qr svg{width:16mm;height:16mm}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:34mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:13px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{break-inside:avoid;page-break-inside:avoid;border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff url(${hallPhoto ? `'${hallPhoto}'` : "none"}) center/80mm auto no-repeat;background-blend-mode:soft-light}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:rgba(255,255,255,.94)}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:8%}.day th:nth-child(2),.day td:nth-child(2){width:39%;text-align:right}.day th:nth-child(3),.day td:nth-child(3){width:25%}.day th:nth-child(4),.day td:nth-child(4){width:16%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.footer{border-top:1px solid #222;background:#fff2c9;margin-top:3mm;padding:3mm 4mm;display:flex;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}section{break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}${courseQrMarkup}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
+  return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
+    @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:38%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:12%}.day th:nth-child(3),.day td:nth-child(3){width:15%}.day th:nth-child(4),.day td:nth-child(4){width:13%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.day th:nth-child(6),.day td:nth-child(6){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
     const dayMuscles = [...new Set(day.map((e) => e.muscle))].filter(Boolean).join(" + ");
-    return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>م</th><th>التمرين</th><th>المجاميع × التكرارات</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
-  }).join("")}<footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span>${footerNote ? `<span>${footerNote}</span>` : ""}</footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
+    return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th><th>الوزن</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
+  }).join("")}<div class="login-qr">${courseQrMarkup}</div><footer class="footer"><span>${escapeHtml(s.phone || "")}</span><span>${escapeHtml(s.whatsapp || "")}</span><span>${escapeHtml(s.instagram || "")}</span><span>${escapeHtml(s.address || "")}</span>${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
 }
 function PrintPreviewModal({
   member,

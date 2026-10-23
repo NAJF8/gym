@@ -1,7 +1,7 @@
 {
   "name": "al-asas-fit",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -20,6 +20,7 @@
     "test:library": "node --experimental-strip-types --test tests/exercise-library.test.mjs"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-sans-arabic": "5.3.0",
     "@vitejs/plugin-react": "latest",
     "firebase": "^13.0.0",
     "lucide-react": "latest",
