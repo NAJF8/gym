@@ -353,6 +353,11 @@ export async function writeAdminData<T>(
       throw new Error("رابط فيديو غير آمن أو غير معتمد");
     const description = typeof exercise.description === "string" ? exercise.description.trim().slice(0, 1000) : "";
     const image = typeof exercise.image === "string" ? exercise.image.trim().slice(0, 512) : "";
+    const videoReviewStatus = exercise.videoReviewStatus === "verified" && video
+      ? "verified"
+      : video
+        ? "needs_review"
+        : "none";
     return stripUndefined({
       id: exercise.id,
       name: exercise.name,
@@ -362,6 +367,7 @@ export async function writeAdminData<T>(
       reps: exercise.reps,
       rest: exercise.rest,
       video: video || "",
+      videoReviewStatus,
       ...(description ? { description } : {}),
       ...(image ? { image } : {}),
     }) as Record<string, unknown>;
@@ -384,7 +390,7 @@ export async function writeAdminData<T>(
     const old = oldPublic.get(id);
     if (same(next, old)) continue;
     const projection = next || old;
-    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "description", "image"])
+    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "videoReviewStatus", "description", "image"])
       updates[`publicExercises/${id}/${field}`] = next ? (projection?.[field] ?? null) : null;
   }
 
