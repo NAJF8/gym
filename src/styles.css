@@ -120,6 +120,12 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 @media(max-width:360px){.member-info-grid{grid-template-columns:1fr}.member-section-heading{flex-direction:column;gap:8px}.member-exercise-actions{gap:8px}.exercise-watch-button{font-size:11px}}
 @media(prefers-reduced-motion:reduce){.member-day-tabs button,.member-exercise-card{transition:none}.member-day-tabs button:hover{transform:none}}
 
+/* Keep the public exercise state calm and user-facing; technical review details stay out of the member view. */
+.exercise-video-unavailable{display:flex;align-items:center;gap:10px;padding:15px;border:1px solid #e0e9d9;border-radius:10px;background:#f8fbf6;color:#5e7547;font-size:0}
+.exercise-video-unavailable svg{flex:0 0 auto;width:21px;height:21px;color:#78a52a}
+.exercise-video-unavailable>div{display:none}
+.exercise-video-unavailable::after{content:"شرح التمرين";font-size:14px;font-weight:700;color:#304d27}
+
 @media(max-width:700px){
   .app-shell{display:block}
   .main-area{width:100%;margin-right:0}
@@ -161,7 +167,7 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .member-login-submit:disabled{opacity:.5;cursor:not-allowed}
 .member-login-form .auth-error{margin:4px 0 0;text-align:right;font-size:12px}
 .member-login-card .auth-help{margin:20px 0 0!important;text-align:center;line-height:1.8}
-.member-login-footer{font-size:10px;color:#737e6d;text-align:center}
+.member-login-footer{font-size:0;color:#737e6d;text-align:center}.member-login-footer::before{content:"© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية";display:block;font-size:10px}.member-login-footer::after{content:"AL ASAS FIT — Version 1.8.0";display:block;font:10px/1.6 Arial,sans-serif;letter-spacing:.02em}
 .portal-exercise-link{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:138px;padding:7px;border:1px solid #d9e7c6;border-radius:10px;background:#f7ffec;text-decoration:none;color:#314d0e}
 .portal-exercise-link svg{flex-shrink:0}
 .portal-exercise-link>span{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#314d0e;white-space:nowrap}
