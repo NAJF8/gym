@@ -1,6 +1,7 @@
-import { get, onValue, ref, update, type Unsubscribe } from "firebase/database";
+import { get, onValue, ref, runTransaction, update, type Unsubscribe } from "firebase/database";
 import { firebaseDatabase } from "./firebase";
 import { safeVideoUrl } from "./videoUrl";
+import { keyedMembers, membersFromData, MEMBER_TOMBSTONES_PATH, MEMBERS_PATH, deleteMemberRecord, upsertMemberRecord } from "./memberStorage";
 
 export type FirebaseSyncPhase = "update" | "read" | "verify";
 
@@ -32,12 +33,13 @@ export function firebaseSyncError(
   return new FirebaseSyncError(phase, code || "UNKNOWN", message);
 }
 
-export type SyncPayload<TSettings, TExercise, TMember, TCourse> = {
+export type SyncPayload<TSettings, TExercise, TMember, TCourse, TCategory = unknown> = {
   schemaVersion: 1;
   settings: TSettings;
   exercises: TExercise[];
   members: TMember[];
   courses: TCourse[];
+  categories?: TCategory[];
   migratedAt?: string;
 };
 
@@ -47,6 +49,19 @@ export function dedupeById<T extends { id: string }>(items: unknown): T[] {
       Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"),
   );
   return [...new Map(safe.map((item) => [item.id, item])).values()];
+}
+
+/** RTDB turns sparse legacy arrays into objects keyed by their numeric index. */
+export function collectionItems<T = unknown>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (value && typeof value === "object") return Object.values(value as Record<string, T>);
+  return [];
+}
+
+function collectionEntries(value: unknown): Array<[string, unknown]> {
+  if (Array.isArray(value)) return value.map((item, index) => [String(index), item]);
+  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>);
+  return [];
 }
 
 /** RTDB rejects undefined anywhere in an update payload. */
@@ -75,19 +90,93 @@ export function watchAdminData<T>(
   callback: (value: T | null) => void,
 ): Unsubscribe | (() => undefined) {
   if (!firebaseDatabase) return () => undefined;
-  return onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
-    callback(snapshot.exists() ? (snapshot.val() as T) : null);
+  let appData: T | null = null;
+  let appLoaded = false;
+  const publish = () => {
+    if (!appLoaded) return;
+    const value = appData as (T & { members?: unknown }) | null;
+    if (value) callback({ ...value, members: membersFromData(value) } as T);
+    else callback(appData);
+  };
+  const stopApp = onValue(ref(firebaseDatabase, "appData"), (snapshot) => {
+    appData = snapshot.exists() ? snapshot.val() as T : null;
+    appLoaded = true;
+    publish();
   });
+  return () => { stopApp(); };
 }
 
 export async function readAdminData<T>() {
   if (!firebaseDatabase) return null;
   try {
     const snapshot = await get(ref(firebaseDatabase, "appData"));
-    return snapshot.exists() ? (snapshot.val() as T) : null;
+    const value = snapshot.exists() ? snapshot.val() as T & { members?: unknown } : null;
+    if (!value) return null;
+    value.members = membersFromData(value);
+    return value as T;
   } catch (error) {
     throw new FirebaseSyncError("read", firebaseErrorCode(error), "تعذر قراءة Firebase RTDB");
   }
+}
+
+/** Delete a member only after the authoritative RTDB update is acknowledged and read back. */
+export async function deleteAdminMember(memberId: string) {
+  if (!firebaseDatabase) throw new FirebaseSyncError("update", "NOT_CONFIGURED", "Firebase RTDB غير مهيأ");
+  if (!memberId) throw new FirebaseSyncError("update", "MEMBER_REQUIRED", "معرّف المشترك مطلوب");
+  try {
+    const snapshot = await get(ref(firebaseDatabase, "appData"));
+    const appData = snapshot.val() as { membersById?: unknown; members?: unknown } | null;
+    const members = membersFromData(appData);
+    const member = members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as Record<string, unknown> | undefined;
+    const tombstoneSnapshot = await get(ref(firebaseDatabase, `${MEMBER_TOMBSTONES_PATH}/${memberId}`));
+    if (!member && !tombstoneSnapshot.exists()) throw new FirebaseSyncError("verify", "MEMBER_NOT_FOUND", "المشترك غير موجود في Firebase");
+    const uid = typeof member?.authUid === "string" ? member.authUid : "";
+    await deleteMemberRecord(firebaseDatabase, memberId, member);
+    if (uid) await update(ref(firebaseDatabase), { [`membersByUid/${uid}`]: null });
+
+    // The keyed record transaction above targets only this member and leaves
+    // unrelated records untouched.
+
+    const phone = typeof member?.phoneE164 === "string" ? member.phoneE164 : typeof member?.phone === "string" ? member.phone : "";
+    if (phone) await runTransaction(ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`), (current) => current === memberId ? null : current);
+
+    const [membersCheck, profileCheck] = await Promise.all([
+      get(ref(firebaseDatabase, MEMBERS_PATH)),
+      uid ? get(ref(firebaseDatabase, `membersByUid/${uid}`)) : Promise.resolve(null),
+    ]);
+    const persistedMembers = membersCheck.val();
+    const stillPresent = Boolean(keyedMembers(persistedMembers)[memberId]);
+    if (stillPresent || profileCheck?.exists()) throw new FirebaseSyncError("verify", "DELETE_MISMATCH", "لم يتأكد حذف المشترك من Firebase RTDB");
+    return { member: member || null, memberId };
+  } catch (error) {
+    if (error instanceof FirebaseSyncError) throw error;
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر حذف المشترك من Firebase RTDB");
+  }
+}
+
+export async function readAdminMember<T>(memberId: string) {
+  const data = await readAdminData<{ members?: unknown }>();
+  const members = collectionItems(data?.members);
+  return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
+}
+
+/** Read-only health check for records left behind by an interrupted delete. */
+export async function readAdminDeletionConflicts() {
+  if (!firebaseDatabase) return [] as Array<{ id: string; member: Record<string, unknown>; deletedAt: string }>;
+  const [membersSnapshot, tombstonesSnapshot] = await Promise.all([
+    get(ref(firebaseDatabase, MEMBERS_PATH)),
+    get(ref(firebaseDatabase, MEMBER_TOMBSTONES_PATH)),
+  ]);
+  const members = membersSnapshot.val();
+  const tombstones = tombstonesSnapshot.val() as Record<string, { deletedAt?: unknown }> | null;
+  if (!tombstones || typeof tombstones !== "object") return [];
+  return Object.values(keyedMembers(members)).flatMap((member) => {
+    if (!member || typeof member !== "object" || typeof (member as { id?: unknown }).id !== "string") return [];
+    const id = (member as { id: string }).id;
+    const tombstone = tombstones[id];
+    if (!tombstone) return [];
+    return [{ id, member: member as Record<string, unknown>, deletedAt: String(tombstone.deletedAt || "") }];
+  });
 }
 
 export async function readAdminExercises<T>() {
@@ -104,6 +193,38 @@ export async function readMemberProfile<T>(uid: string) {
   if (!firebaseDatabase) return null;
   const snapshot = await get(ref(firebaseDatabase, `membersByUid/${uid}`));
   return snapshot.exists() ? (snapshot.val() as T) : null;
+}
+
+function phoneIndexKey(phone: string) {
+  return encodeURIComponent(phone);
+}
+
+/** Atomically claims a phone number for a member. The index is only a lock/uniqueness aid. */
+export async function reserveMemberPhone(phone: string, memberId: string) {
+  if (!firebaseDatabase) throw new Error("Firebase RTDB غير مهيأ");
+  try {
+    const result = await runTransaction(
+      ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`),
+      (current) => current === null || current === memberId ? memberId : undefined,
+    );
+    if (!result.committed || result.snapshot.val() !== memberId)
+      throw firebaseSyncError("update", "PHONE_CONFLICT", "رقم الهاتف مستخدم لمشترك آخر");
+  } catch (error) {
+    if (error instanceof FirebaseSyncError) throw error;
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر حجز رقم الهاتف في Firebase RTDB");
+  }
+}
+
+export async function releaseMemberPhone(phone: string, memberId: string) {
+  if (!firebaseDatabase) return;
+  try {
+    await runTransaction(
+      ref(firebaseDatabase, `memberPhoneIndex/${phoneIndexKey(phone)}`),
+      (current) => current === memberId ? null : current,
+    );
+  } catch (error) {
+    throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر تحرير حجز رقم الهاتف القديم");
+  }
 }
 
 export function watchMemberProfile<T>(
@@ -130,6 +251,7 @@ export async function writeAdminData<T>(
     exercises?: unknown;
     members?: unknown;
     courses?: unknown;
+    categories?: unknown;
     migratedAt?: unknown;
   };
   const previous = (options.previous && typeof options.previous === "object"
@@ -140,12 +262,13 @@ export async function writeAdminData<T>(
     exercises?: unknown;
     members?: unknown;
     courses?: unknown;
+    categories?: unknown;
     migratedAt?: unknown;
   } | null;
   const updates: Record<string, unknown> = {};
   const same = (left: unknown, right: unknown) =>
     JSON.stringify(stripUndefined(left)) === JSON.stringify(stripUndefined(right));
-  const arrayUpdates = (key: "exercises" | "members" | "courses") => {
+  const arrayUpdates = (key: "exercises" | "members" | "courses" | "categories") => {
     const next = appData[key];
     if (!Array.isArray(next)) return;
     const old = previous?.[key];
@@ -172,8 +295,30 @@ export async function writeAdminData<T>(
     });
   };
   arrayUpdates("exercises");
-  arrayUpdates("members");
   arrayUpdates("courses");
+  arrayUpdates("categories");
+
+  const nextMembers = Array.isArray(appData.members) ? appData.members as Array<Record<string, unknown>> : [];
+  const oldMembers = Array.isArray(previous?.members) ? previous.members as Array<Record<string, unknown>> : [];
+  const memberMap = (members: Array<Record<string, unknown>>) => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const member of members) {
+      if (!member || typeof member.id !== "string" || !member.id.trim()) throw new Error("MEMBER_ID_REQUIRED");
+      if (map.has(member.id)) throw new Error("MEMBER_ID_DUPLICATE");
+      map.set(member.id, member);
+    }
+    return map;
+  };
+  const nextMemberMap = memberMap(nextMembers);
+  const oldMemberMap = memberMap(oldMembers);
+  const memberOperations: Array<{ type: "upsert" | "delete"; id: string; member?: Record<string, unknown>; previous?: Record<string, unknown> }> = [];
+  for (const [id, member] of nextMemberMap) {
+    const old = oldMemberMap.get(id);
+    if (!old || !same(member, old)) memberOperations.push({ type: "upsert", id, member: stripUndefined(member), previous: old });
+  }
+  for (const [id, old] of oldMemberMap) {
+    if (!nextMemberMap.has(id)) memberOperations.push({ type: "delete", id, previous: old });
+  }
 
   if (options.role === "SUPER_ADMIN") {
     for (const key of ["schemaVersion", "settings"] as const) {
@@ -206,6 +351,13 @@ export async function writeAdminData<T>(
     const video = safeVideoUrl(exercise.video);
     if (exercise.video !== undefined && exercise.video !== "" && !video)
       throw new Error("رابط فيديو غير آمن أو غير معتمد");
+    const description = typeof exercise.description === "string" ? exercise.description.trim().slice(0, 1000) : "";
+    const image = typeof exercise.image === "string" ? exercise.image.trim().slice(0, 512) : "";
+    const videoReviewStatus = exercise.videoReviewStatus === "verified" && video
+      ? "verified"
+      : video
+        ? "needs_review"
+        : "none";
     return stripUndefined({
       id: exercise.id,
       name: exercise.name,
@@ -215,6 +367,9 @@ export async function writeAdminData<T>(
       reps: exercise.reps,
       rest: exercise.rest,
       video: video || "",
+      videoReviewStatus,
+      ...(description ? { description } : {}),
+      ...(image ? { image } : {}),
     }) as Record<string, unknown>;
   };
   const nextExercises = Array.isArray(appData.exercises)
@@ -235,8 +390,59 @@ export async function writeAdminData<T>(
     const old = oldPublic.get(id);
     if (same(next, old)) continue;
     const projection = next || old;
-    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video"])
-      updates[`publicExercises/${id}/${field}`] = next ? projection?.[field] : null;
+    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "videoReviewStatus", "description", "image"])
+      updates[`publicExercises/${id}/${field}`] = next ? (projection?.[field] ?? null) : null;
+  }
+
+  const nextCourses = Array.isArray(appData.courses)
+    ? (appData.courses as Array<Record<string, unknown>>)
+    : [];
+  const oldCourses = Array.isArray(previous?.courses)
+    ? (previous.courses as Array<Record<string, unknown>>)
+    : [];
+  const toPublicCourse = (course: Record<string, unknown>) =>
+    stripUndefined({
+      id: String(course.id || ""),
+      name: String(course.name || "كورس تدريبي"),
+      notes: typeof course.notes === "string" ? course.notes.slice(0, 1000) : "",
+      days: Array.isArray(course.days) ? course.days : [],
+    });
+  const nextPublicCourses = new Map<string, Record<string, unknown>>();
+  for (const c of nextCourses) {
+    if (c && typeof c.id === "string" && c.id) nextPublicCourses.set(c.id, toPublicCourse(c));
+  }
+  for (const m of nextMembers) {
+    if (m && typeof m.id === "string" && m.id) {
+      const cid = `member-${m.id}`;
+      nextPublicCourses.set(cid, stripUndefined({
+        id: cid,
+        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
+        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        days: Array.isArray(m.days) ? m.days : [],
+      }));
+    }
+  }
+  const oldPublicCourses = new Map<string, Record<string, unknown>>();
+  for (const c of oldCourses) {
+    if (c && typeof c.id === "string" && c.id) oldPublicCourses.set(c.id, toPublicCourse(c));
+  }
+  for (const m of oldMembers) {
+    if (m && typeof m.id === "string" && m.id) {
+      const cid = `member-${m.id}`;
+      oldPublicCourses.set(cid, stripUndefined({
+        id: cid,
+        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
+        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        days: Array.isArray(m.days) ? m.days : [],
+      }));
+    }
+  }
+  const publicCourseIds = new Set([...nextPublicCourses.keys(), ...oldPublicCourses.keys()]);
+  for (const cid of publicCourseIds) {
+    const next = nextPublicCourses.get(cid);
+    const old = oldPublicCourses.get(cid);
+    if (same(next, old)) continue;
+    updates[`publicCourses/${cid}`] = next || null;
   }
 
   const profile = (member: Record<string, unknown>) =>
@@ -247,16 +453,9 @@ export async function writeAdminData<T>(
       height: member.height || "",
       weight: member.weight || "",
       createdAt: member.createdAt || "",
-      photo: member.photo || "",
       days: member.days || [],
       active: member.active !== false,
     });
-  const nextMembers = Array.isArray(appData.members)
-    ? (appData.members as Array<Record<string, unknown>>)
-    : [];
-  const oldMembers = Array.isArray(previous?.members)
-    ? (previous.members as Array<Record<string, unknown>>)
-    : [];
   const oldProfiles = new Map(
     oldMembers
       .filter((member) => typeof member.authUid === "string" && member.authUid.length >= 20)
@@ -270,6 +469,10 @@ export async function writeAdminData<T>(
   }
 
   try {
+    for (const operation of memberOperations) {
+      if (operation.type === "upsert") await upsertMemberRecord(firebaseDatabase, operation.member!, operation.previous);
+      else await deleteMemberRecord(firebaseDatabase, operation.id, operation.previous);
+    }
     await update(ref(firebaseDatabase), { ...updates });
   } catch (error) {
     throw new FirebaseSyncError("update", firebaseErrorCode(error), "تعذر تحديث Firebase RTDB");
@@ -290,4 +493,42 @@ export function watchPublicExercise<T>(
       callback(snapshot.exists() ? (snapshot.val() as T) : null);
     },
   );
+}
+
+export function watchPublicCourse<T>(
+  courseId: string,
+  callback: (value: T | null) => void,
+): Unsubscribe | (() => undefined) {
+  if (!firebaseDatabase) {
+    callback(null);
+    return () => undefined;
+  }
+  return onValue(
+    ref(firebaseDatabase, `publicCourses/${courseId}`),
+    (snapshot) => {
+      callback(snapshot.exists() ? (snapshot.val() as T) : null);
+    },
+  );
+}
+
+/** Scoped settings write for authorized gym managers. Never writes the settings parent node. */
+export async function saveManagerPrintSettings(values: {
+  logo: string; printCoachPhotoUrl: string; printHallPhotoUrl: string;
+  printFooterNote: string; phone: string; instagram: string;
+}) {
+  if (!firebaseDatabase) throw new Error("Firebase RTDB غير مهيأ");
+  const changes: Record<string, string> = {};
+  for (const key of ["logo","printCoachPhotoUrl","printHallPhotoUrl","printFooterNote","phone","instagram"] as const) {
+    const value = values[key].trim();
+    const max = key === "printFooterNote" ? 500 : key === "phone" ? 64 : 512;
+    if (value.length > max) throw new Error("القيمة طويلة جداً: " + key);
+    if (["logo","printCoachPhotoUrl","printHallPhotoUrl"].includes(key) &&
+       value && !(value.startsWith("/") && !value.startsWith("//") && !value.includes("..")) &&
+       !/^https:\/\//i.test(value)) throw new Error("رابط الصورة يجب أن يبدأ بـ HTTPS أو /assets/");
+    changes[key] = value;
+  }
+  await update(ref(firebaseDatabase,"appData/settings"),changes);
+  const verified = (await get(ref(firebaseDatabase,"appData/settings"))).val() as Record<string, unknown> | null;
+  if (!verified || Object.keys(changes).some(key => verified[key] !== changes[key]))
+    throw new Error("تعذر تأكيد حفظ إعدادات الطباعة");
 }
