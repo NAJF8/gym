@@ -155,6 +155,7 @@ type Exercise = {
   reps: string;
   rest: string;
   video?: string;
+  videoReviewStatus?: "needs_review" | "verified" | "none";
   description?: string;
   image?: string;
 };
@@ -1895,6 +1896,11 @@ function ExerciseModal({
     if (e.english?.trim()) cleaned.english = e.english.trim();
     const validVideo = safeVideoUrl(e.video);
     if (validVideo) cleaned.video = validVideo;
+    cleaned.videoReviewStatus = validVideo
+      ? initial && initial.videoReviewStatus === "verified" && safeVideoUrl(initial.video) === validVideo
+        ? "verified"
+        : "needs_review"
+      : "none";
     if (e.description?.trim()) cleaned.description = e.description.trim();
     if (trimmedImage) cleaned.image = trimmedImage;
     onSave(cleaned);
@@ -1982,6 +1988,8 @@ function Barcodes({
   const [show, setShow] = useState(false);
   const [selected, setSelected] = useState<Exercise | undefined>();
   const [selectedCourse, setSelectedCourse] = useState<ReadyCourse | undefined>(courses[0]);
+  const [previewVideo, setPreviewVideo] = useState(false);
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (initialQuery) setQuery(initialQuery);
   }, [initialQuery]);
@@ -2004,18 +2012,40 @@ function Barcodes({
     );
   }, [courses]);
   const save = (exercise: Exercise) => {
+    const previous = exercises.find((e) => e.id === exercise.id);
+    const previousVideo = safeVideoUrl(previous?.video);
+    const nextVideo = safeVideoUrl(exercise.video);
+    const normalizedExercise = {
+      ...exercise,
+      videoReviewStatus: nextVideo
+        ? previous?.videoReviewStatus === "verified" && previousVideo === nextVideo
+          ? "verified"
+          : "needs_review"
+        : "none",
+    } satisfies Exercise;
     const nextExercises = exercises.some((e) => e.id === exercise.id)
-      ? exercises.map((e) => (e.id === exercise.id ? exercise : e))
-      : [...exercises, exercise];
+      ? exercises.map((e) => (e.id === exercise.id ? normalizedExercise : e))
+      : [...exercises, normalizedExercise];
     setExercises(nextExercises);
     window.dispatchEvent(new CustomEvent("alasas-save-exercises", { detail: { exercises: nextExercises } }));
-    setSelected(exercise);
+    setSelected(normalizedExercise);
     setShow(false);
     setEditing(null);
+    setPreviewVideo(false);
   };
   const url = mode === "exercises"
     ? (selected ? exerciseUrl(selected.id) : "")
     : (selectedCourse ? courseUrl(selectedCourse.id) : "");
+  const selectedVideo = mode === "exercises" ? safeVideoUrl(selected?.video) : null;
+  const selectedVideoId = youtubeVideoId(selectedVideo);
+  const selectedVideoEmbed = selectedVideoId ? youtubeEmbedUrl(selectedVideo) : null;
+  const selectedVideoVerified = selected?.videoReviewStatus === "verified" && Boolean(selectedVideoId);
+  const copyExerciseUrl = async () => {
+    if (!url || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
   const download = () => {
     const svg = document.querySelector(
       ".qr-detail svg",
@@ -2051,18 +2081,10 @@ function Barcodes({
         </div>
       </section>
       <div className="barcode-layout">
-        <div className="panel barcode-picker">
+        <aside className="panel barcode-picker barcode-categories">
           {mode === "exercises" ? (
             <>
-              <label className="barcode-search">
-                <Search size={15} />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="ابحث عن تمرين"
-                />
-              </label>
-              <h3>الأقسام</h3>
+              <div className="barcode-column-heading"><span className="section-kicker">التصفية</span><h3>الأقسام</h3></div>
               {muscleList.map((m) => (
                 <button
                   className={m === muscle ? "selected" : ""}
@@ -2076,22 +2098,42 @@ function Barcodes({
                   <ChevronLeft size={15} />
                 </button>
               ))}
-              <hr />
-              <h3>التمارين ({list.length})</h3>
+              <div className="barcode-category-summary"><Dumbbell size={15}/><span>إجمالي التمارين</span><b>{exercises.length}</b></div>
+            </>
+          ) : (
+            <>
+              <div className="barcode-column-heading"><span className="section-kicker">المحتوى</span><h3>الكورسات الجاهزة</h3></div>
+              <div className="barcode-category-summary"><FileText size={15}/><span>الكورسات المتاحة</span><b>{courses.length}</b></div>
+            </>
+          )}
+        </aside>
+        <section className="panel barcode-picker barcode-exercises">
+          {mode === "exercises" ? (
+            <>
+              <label className="barcode-search">
+                <Search size={15} />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="ابحث عن تمرين أو عضلة"
+                  aria-label="ابحث عن تمرين أو عضلة"
+                />
+              </label>
+              <div className="barcode-list-heading"><h3>التمارين</h3><span>{list.length} نتيجة</span></div>
               {list.map((e) => (
                 <button
                   className={selected?.id === e.id ? "selected" : ""}
                   onClick={() => setSelected(e)}
                   key={e.id}
                 >
-                  {e.name}
-                  <small>{youtubeVideoId(e.video) ? "YouTube موثّق" : "UNVERIFIED — لا يوجد فيديو موثّق"}</small>
+                  <span className="barcode-exercise-name">{e.name}<small>{e.english || e.muscle}</small></span>
+                  <span className={e.videoReviewStatus === "verified" && youtubeVideoId(e.video) ? "video-dot verified" : youtubeVideoId(e.video) ? "video-dot review" : "video-dot none"} title={e.videoReviewStatus === "verified" ? "فيديو متحقق" : youtubeVideoId(e.video) ? "يحتاج مراجعة" : "لا يوجد فيديو"}>{e.videoReviewStatus === "verified" && youtubeVideoId(e.video) ? "متحقق" : youtubeVideoId(e.video) ? "مراجعة" : "بدون فيديو"}</span>
                 </button>
               ))}
             </>
           ) : (
             <>
-              <h3>الكورسات الجاهزة ({courses.length})</h3>
+              <div className="barcode-list-heading"><h3>الكورسات</h3><span>{courses.length} نتيجة</span></div>
               {courses.map((c) => (
                 <button
                   className={selectedCourse?.id === c.id ? "selected" : ""}
@@ -2104,20 +2146,17 @@ function Barcodes({
               ))}
             </>
           )}
-        </div>
+        </section>
         <section className="panel qr-detail">
           {mode === "exercises" && selected ? (
             <>
               <div className="exercise-thumb big">
                 {selected.image ? <img src={selected.image} alt={selected.name} className="exercise-card-img" /> : <Dumbbell size={34} />}
               </div>
-              <h2>{selected.name}</h2>
-              <p>
-                {selected.description || (youtubeVideoId(selected.video)
-                  ? "رابط YouTube صالح للحفظ والمعاينة"
-                  : "UNVERIFIED: أضف رابط فيديو YouTube محدداً بعد التحقق من مطابقته للتمرين")}
-              </p>
-              <span className={youtubeVideoId(selected.video) ? "availability-badge video-status verified" : "availability-badge video-status"}>{youtubeVideoId(selected.video) ? "حالة التحقق: VERIFIED" : "حالة التحقق: UNVERIFIED"}</span>
+              <div className="barcode-detail-heading"><div><span className="section-kicker">تفاصيل التمرين</span><h2>{selected.name}</h2><p>{selected.muscle}{selected.english ? ` · ${selected.english}` : ""}</p></div><span className="availability-badge">{selectedVideoVerified ? "فيديو متحقق" : selectedVideoId ? "يحتاج مراجعة" : "بدون فيديو"}</span></div>
+              {selected.description && <p className="barcode-description">{selected.description}</p>}
+              {selectedVideoEmbed && previewVideo && <div className="barcode-video-preview"><iframe title={`معاينة فيديو ${selected.name}`} src={selectedVideoEmbed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>}
+              {selectedVideoId && <div className="barcode-video-actions"><button className="secondary-btn" type="button" onClick={() => setPreviewVideo((value) => !value)}><Play size={15}/>{previewVideo ? "إخفاء المعاينة" : "معاينة الفيديو"}</button><a className="text-btn" href={selectedVideo || "#"} target="_blank" rel="noreferrer"><ExternalLink size={14}/> فتح YouTube</a></div>}
               <div className="qr-box">
                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
               </div>
@@ -2129,6 +2168,13 @@ function Barcodes({
                   icon={<Pencil size={15} />}
                 >
                   تعديل التمرين
+                </Button>
+                <Button
+                  secondary
+                  onClick={copyExerciseUrl}
+                  icon={<Copy size={15} />}
+                >
+                  {copied ? "تم النسخ" : "نسخ رابط التمرين"}
                 </Button>
                 <Button
                   secondary
@@ -2165,6 +2211,7 @@ function Barcodes({
               </div>
               <code dir="ltr">{url}</code>
               <div className="modal-actions">
+                <Button secondary onClick={copyExerciseUrl} icon={<Copy size={15} />}>{copied ? "تم النسخ" : "نسخ الرابط"}</Button>
                 <Button secondary onClick={download} icon={<QrCode size={15} />}>
                   تنزيل QR الكورس
                 </Button>
@@ -3600,7 +3647,7 @@ function PublicExerciseDetail({
     [exerciseId],
   );
   const video = safeVideoUrl(exercise?.video);
-  const embed = youtubeEmbedUrl(video);
+  const embed = exercise?.videoReviewStatus === "verified" ? youtubeEmbedUrl(video) : null;
   return (
     <main className="exercise-detail-page" dir="rtl">
       <header className="public-exercise-header"><Logo s={defaults} /><a className="public-login-link" href={window.location.origin + window.location.pathname}>دخول المشترك <ArrowLeft size={15} /></a></header>
