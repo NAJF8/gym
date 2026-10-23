@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => ({
           source: JSON.stringify({
             commitSha: process.env.VITE_RELEASE_COMMIT_SHA || process.env.GITHUB_SHA || 'local',
             environment: process.env.VITE_RELEASE_ENVIRONMENT || mode,
-            appVersion: process.env.VITE_APP_VERSION || '1.8',
+            appVersion: process.env.VITE_APP_VERSION || '1.8.0',
             builtAt: process.env.VITE_BUILD_TIME || new Date().toISOString(),
           }, null, 2) + '\n',
         })
