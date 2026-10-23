@@ -5,7 +5,7 @@ import zxingcpp
 
 detector = cv2.QRCodeDetector()
 decoded = []
-for path in sorted(glob.glob('output/qr/exercise-*.png')):
+for path in sorted(glob.glob('output/qr/*.png')):
     image = cv2.imread(path)
     value, points, _ = detector.detectAndDecode(image)
     if not value:
