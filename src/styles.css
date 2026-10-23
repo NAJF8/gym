@@ -111,6 +111,8 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .member-login-form .auth-error{margin:4px 0 0;text-align:right;font-size:12px}
 .member-login-card .auth-help{margin:20px 0 0!important;text-align:center;line-height:1.8}
 .member-login-footer{font-size:10px;color:#737e6d;text-align:center}
+.member-customer-footer{display:grid;gap:5px;line-height:1.6}
+.member-customer-footer span:last-child{font-family:Arial,sans-serif;letter-spacing:.02em}
 .portal-exercise-link{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:138px;padding:7px;border:1px solid #d9e7c6;border-radius:10px;background:#f7ffec;text-decoration:none;color:#314d0e}
 .portal-exercise-link svg{flex-shrink:0}
 .portal-exercise-link>span{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#314d0e;white-space:nowrap}
