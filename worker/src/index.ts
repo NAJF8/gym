@@ -359,8 +359,9 @@ async function adminManagement(env: Env, request: Request, action: string) {
   const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string; email?: string } | null;
   if (actor?.role !== 'SUPER_ADMIN') throw new Error('SUPER_ADMIN_REQUIRED');
   const token = await serviceAccessToken(env);
+  const idToken = bearerToken(request);
   if (action === 'list') {
-    const admins = await firebaseGet(env, 'admins', token) as Record<string, Record<string, unknown>> | null;
+    const admins = idToken ? await firebaseGetWithIdToken(env, 'admins', idToken) as Record<string, Record<string, unknown>> | null : null;
     const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt, updatedAt: value.updatedAt, updatedBy: value.updatedBy })).filter(row => row.role === 'COACH' || row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
     const invites = await env.PIN_DB.prepare("SELECT email, display_name AS displayName, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
     for (const invite of invites.results || []) rows.push({ email: String(invite.email || ''), displayName: String(invite.displayName || ''), role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });

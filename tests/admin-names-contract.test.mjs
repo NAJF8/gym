@@ -19,6 +19,7 @@ test("profile updates are bound to the verified actor and cannot change role/ema
   assert.match(worker, /async function adminProfile/);
   assert.match(worker, /admins\/\$\{encodeURIComponent\(actorUid\)\}/);
   assert.match(worker, /ADMIN_DISPLAY_NAME_UPDATED/);
+  assert.match(worker, /firebaseGetWithIdToken\(env, 'admins', idToken\)/);
   assert.match(worker, /if \(body\.action === 'update'\)/);
   assert.match(rules, /newData\.child\('role'\)\.val\(\) === 'COACH'/);
 });
