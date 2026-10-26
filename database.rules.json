@@ -6,7 +6,7 @@
       "$uid": {
         ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && auth.uid === $uid",
         ".write": false,
-        ".validate": "newData.hasChildren(['role', 'active', 'email']) && (newData.child('role').val() === 'SUPER_ADMIN' || newData.child('role').val() === 'MANAGER') && newData.child('active').isBoolean() && newData.child('email').isString()"
+        ".validate": "newData.hasChildren(['role', 'active', 'email']) && (newData.child('role').val() === 'SUPER_ADMIN' || newData.child('role').val() === 'MANAGER' || newData.child('role').val() === 'COACH') && newData.child('active').isBoolean() && newData.child('email').isString() && (!newData.hasChild('displayName') || (newData.child('displayName').isString() && newData.child('displayName').val().length <= 200)) && (!newData.hasChild('updatedAt') || newData.child('updatedAt').isString()) && (!newData.hasChild('updatedBy') || newData.child('updatedBy').isString())"
       }
     },
     "appData": {

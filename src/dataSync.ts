@@ -240,7 +240,7 @@ export function watchMemberProfile<T>(
 export async function writeAdminData<T>(
   payload: T,
   options: {
-    role?: "SUPER_ADMIN" | "MANAGER";
+    role?: "SUPER_ADMIN" | "MANAGER" | "COACH";
     previous?: unknown;
   } = {},
 ) {

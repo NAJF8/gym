@@ -2,8 +2,8 @@ import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut, type 
 import { get, onValue, ref } from 'firebase/database'
 import { adminGoogleProvider, authPersistenceReady, firebaseAuth, firebaseConfigured, firebaseDatabase, googleProvider } from './firebase'
 
-export type AdminRole = 'SUPER_ADMIN' | 'MANAGER'
-export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string }
+export type AdminRole = 'SUPER_ADMIN' | 'MANAGER' | 'COACH'
+export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string; updatedAt?: string; updatedBy?: string; lastLoginAt?: string }
 export type SafeAuthDiagnostics = {
   uid: string | null
   providerId: string | null
@@ -13,8 +13,8 @@ export type SafeAuthDiagnostics = {
 function parseAdminRecord(value: unknown): AdminRecord | null {
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
-  if ((record.role !== 'SUPER_ADMIN' && record.role !== 'MANAGER') || typeof record.active !== 'boolean') return null
-  return { role: record.role, active: record.active, email: typeof record.email === 'string' ? record.email : undefined, displayName: typeof record.displayName === 'string' ? record.displayName : undefined }
+  if ((record.role !== 'SUPER_ADMIN' && record.role !== 'MANAGER' && record.role !== 'COACH') || typeof record.active !== 'boolean') return null
+  return { role: record.role, active: record.active, email: typeof record.email === 'string' ? record.email : undefined, displayName: typeof record.displayName === 'string' ? record.displayName : undefined, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : undefined, updatedBy: typeof record.updatedBy === 'string' ? record.updatedBy : undefined, lastLoginAt: typeof record.lastLoginAt === 'string' ? record.lastLoginAt : undefined }
 }
 
 export function watchAuth(callback: (user: User | null) => void) {

@@ -1,7 +1,8 @@
-export type InvitationRole = "MANAGER" | "SUPER_ADMIN";
+export type InvitationRole = "COACH" | "MANAGER";
 export type InvitationRow = {
   invitation_id: string;
   email: string;
+  display_name: string;
   role: InvitationRole;
   status: "PENDING" | "CLAIMED" | "APPLIED" | "REVOKED" | "EXPIRED" | "REJECTED";
   expires_at: number;
@@ -21,14 +22,14 @@ export function normalizeInvitationEmail(value: unknown) {
 }
 
 export function validInvitationRole(value: unknown): value is InvitationRole {
-  return value === "MANAGER" || value === "SUPER_ADMIN";
+  return value === "COACH" || value === "MANAGER";
 }
 
-export async function createInvitation(db: Db, input: { invitationId: string; email: string; role: InvitationRole; actorUid: string; now: number; expiresAt: number }) {
+export async function createInvitation(db: Db, input: { invitationId: string; email: string; displayName: string; role: InvitationRole; actorUid: string; now: number; expiresAt: number }) {
   await db.batch([
     db.prepare("UPDATE admin_invitations SET status = 'REVOKED', updated_at = ? WHERE email = ? AND status IN ('PENDING', 'CLAIMED')").bind(input.now, input.email),
-    db.prepare("INSERT INTO admin_invitations (invitation_id, email, role, status, expires_at, created_at, created_by_uid, claimed_uid, claimed_at, applied_uid, applied_at, updated_at) VALUES (?, ?, ?, 'PENDING', ?, ?, ?, NULL, NULL, NULL, NULL, ?)").bind(input.invitationId, input.email, input.role, input.expiresAt, input.now, input.actorUid, input.now),
-    db.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) VALUES (?, 'INVITE_CREATED', ?, ?, NULL, ?, ?, NULL, ?)").bind(crypto.randomUUID(), input.invitationId, input.actorUid, input.email, input.role, input.now),
+    db.prepare("INSERT INTO admin_invitations (invitation_id, email, display_name, role, status, expires_at, created_at, created_by_uid, claimed_uid, claimed_at, applied_uid, applied_at, updated_at) VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, NULL, NULL, NULL, NULL, ?)").bind(input.invitationId, input.email, input.displayName, input.role, input.expiresAt, input.now, input.actorUid, input.now),
+    db.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) VALUES (?, 'INVITE_CREATED', ?, ?, NULL, ?, ?, ?, ?)").bind(crypto.randomUUID(), input.invitationId, input.actorUid, input.email, input.role, JSON.stringify({ displayName: input.displayName }), input.now),
   ]);
 }
 

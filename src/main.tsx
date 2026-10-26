@@ -76,7 +76,7 @@ import {
   type PinAuditLogEntry,
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
-import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, updateManagedAdmin, type ManagedAdmin } from "./adminManagement";
+import { acceptAdminInvitation, inviteAdmin, listManagedAdmins, touchAdminLogin, updateManagedAdmin, updateOwnDisplayName, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl, youtubeEmbedUrl, youtubeVideoId } from "./videoUrl";
 import { safeImageUrl } from "./imageUrl";
 import { APP_VERSION } from "./release";
@@ -616,7 +616,9 @@ type Page =
   | "courses"
   | "members"
   | "settings"
-  | "admins";
+  | "admins"
+  | "profile";
+type AdminProfile = AdminRecord & { uid: string };
 function Logo({ s }: { s: SettingsData }) {
   return (
     <div className="brand">
@@ -680,12 +682,14 @@ function Sidebar({
   setPage,
   s,
   role,
+  admin,
   onSignOut,
 }: {
   page: Page;
   setPage: (p: Page) => void;
   s: SettingsData;
   role: AdminRecord["role"];
+  admin: AdminProfile;
   onSignOut: () => void;
 }) {
   const close = () =>
@@ -734,13 +738,16 @@ function Sidebar({
         )}
       </nav>
       <div className="sidebar-bottom">
+        <button className="account-profile-btn" type="button" onClick={() => { setPage("profile"); close(); }} aria-label="فتح الملف الشخصي">
         <div className="coach-mini">
-          <div className="avatar lime">{s.coachName.slice(0, 1)}</div>
+          <div className="avatar lime">{(admin.displayName || admin.email || s.coachName).slice(0, 1)}</div>
           <div>
-            <b>{s.coachName}</b>
-            <span>كابتن ومدير</span>
+            <b>{admin.displayName || "بدون اسم"}</b>
+            <span>{admin.role === "COACH" ? "كابتن" : admin.role === "MANAGER" ? "مدير" : "Super Admin"}</span>
           </div>
         </div>
+        </button>
+        <button className="profile-link" type="button" onClick={() => { setPage("profile"); close(); }}><Settings size={16} /><span>الملف الشخصي</span></button>
         <button className="logout-btn" type="button" onClick={onSignOut}>
           <LogOut size={17} />
           <span>تسجيل الخروج</span>
@@ -1163,9 +1170,11 @@ function CentralDataBridge({
 }
 function App({
   role,
+  admin,
   onSignOut,
 }: {
   role: AdminRecord["role"];
+  admin: AdminProfile;
   onSignOut: () => void;
 }) {
   const [settings, setSettings] = useState(() =>
@@ -1222,6 +1231,7 @@ function App({
     members: "المشتركون",
     settings: "إعدادات الموقع",
     admins: "المدراء والصلاحيات",
+    profile: "الملف الشخصي",
   }[page];
   return (
     <div
@@ -1247,7 +1257,7 @@ function App({
           {createPortal(
             <div id="admin-mobile-drawer" className={open ? "sidebar-wrap open" : "sidebar-wrap"} onClick={() => setOpen(false)}>
               <div className="sidebar-drawer" onClick={(e) => e.stopPropagation()}>
-                <Sidebar page={page} setPage={(next) => { setPage(next); setOpen(false); }} s={settings} role={role} onSignOut={onSignOut}/>
+                <Sidebar page={page} setPage={(next) => { setPage(next); setOpen(false); }} s={settings} role={role} admin={admin} onSignOut={onSignOut}/>
               </div>
               {open && <button type="button" className="sidebar-mobile-close" aria-label="إغلاق القائمة" onClick={() => setOpen(false)}><X size={21}/></button>}
             </div>,
@@ -1340,6 +1350,7 @@ function App({
                 )
               )}
               {page === "admins" && role === "SUPER_ADMIN" && <AdminManagementPage />}
+              {page === "profile" && <ProfilePage admin={admin} />}
             </main>
           </div>
         </>
@@ -1390,7 +1401,7 @@ function AdminGate() {
     void readAdminRecord(user.uid).then(existing => {
       if (existing) return null;
       return acceptAdminInvitation().then(() => user.getIdToken(true));
-    }).catch(() => undefined);
+    }).then(() => touchAdminLogin()).catch(() => undefined);
   }, [user]);
   useEffect(
     () => {
@@ -1454,7 +1465,7 @@ function AdminGate() {
         actionLabel="تسجيل الخروج"
       />
     );
-  return <App role={record.role} onSignOut={signOutUser} />;
+  return <App role={record.role} admin={{ ...record, uid: user.uid }} onSignOut={signOutUser} />;
 }
 function MemberGate() { return <MemberPinGate />; }
 function Stat({label,value,icon:Icon}:{label:string;value:string;icon:typeof Users}){return <div className="stat-card"><div className="stat-icon"><Icon size={18}/></div><div><span>{label}</span><strong>{value}</strong><small>من البيانات الحالية</small></div></div>}
@@ -3742,12 +3753,20 @@ function PublicCourseDetail({
   );
 }
 function AdminManagementPage() {
-  const [admins, setAdmins] = useState<ManagedAdmin[]>([]); const [email, setEmail] = useState(''); const [role, setRole] = useState<ManagedAdmin['role']>('MANAGER'); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
+  const [admins, setAdmins] = useState<ManagedAdmin[]>([]); const [displayName, setDisplayName] = useState(''); const [email, setEmail] = useState(''); const [role, setRole] = useState<'COACH' | 'MANAGER'>('COACH'); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
   const refresh = () => void listManagedAdmins().then(result => setAdmins(result.admins)).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل المدراء'));
   useEffect(() => { refresh(); }, []);
-  const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(email, role); setEmail(''); setMessage('تم إنشاء دعوة محددة الصلاحية. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
-  const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; try { await updateManagedAdmin(item.uid || '', action, action === 'role' ? (item.role === 'MANAGER' ? 'SUPER_ADMIN' : 'MANAGER') : undefined, value); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
-  return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والصلاحيات</h2><p>الدعوات لا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة مدير</h3><div className="form-grid"><label>البريد الإلكتروني<input dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="manager@example.com" /></label><label>نوع الصلاحية<select value={role} onChange={e => setRole(e.target.value as ManagedAdmin['role'])}><option value="MANAGER">MANAGER</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></label></div><Button onClick={add} icon={<Plus size={16} />}>{busy ? 'جارٍ الإنشاء…' : 'إضافة المدير'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>المدير</th><th>الدور</th><th>الحالة</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td><b>{item.displayName || '—'}</b><div dir="ltr">{item.email}</div></td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.createdAt ? new Date(item.createdAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا يوجد مدراء إضافيون" text="أنشئ دعوة اختبارية من النموذج أعلاه." />}</section></div>;
+  const add = async () => { setBusy(true); setError(''); setMessage(''); try { await inviteAdmin(displayName, email, role); setDisplayName(''); setEmail(''); setMessage('تم حفظ الدعوة بالاسم والدور. لن تُفعّل قبل تسجيل Google بالبريد نفسه.'); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء الدعوة'); } finally { setBusy(false); } };
+  const update = async (item: ManagedAdmin, action: 'active' | 'remove' | 'role' | 'displayName', value?: boolean) => { if (action === 'remove' && !window.confirm(`إزالة صلاحية ${item.email}؟`)) return; if (!item.uid) return; try { const nextRole = action === 'role' ? (item.role === 'COACH' ? 'MANAGER' : 'COACH') : undefined; await updateManagedAdmin(item.uid, action, nextRole, value, action === 'displayName' ? window.prompt('الاسم الكامل الجديد', item.displayName || '') || undefined : undefined); refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'تعذر تعديل المدير'); } };
+  return <div className="admin-management-page"><section className="section-heading"><div><h2>المدراء والموظفون | Team & Access</h2><p>الدعوات تحفظ الاسم المحدد من الإدارة، ولا تمنح صلاحية قبل إثبات ملكية البريد عبر Google.</p></div></section><section className="panel admin-management-form"><h3>إضافة كابتن أو مدير</h3><div className="form-grid"><label>الاسم الكامل<input required value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="أحمد محمد" /></label><label>البريد الإلكتروني<input required dir="ltr" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="coach@example.com" /></label><label>الصلاحية<select value={role} onChange={e => setRole(e.target.value as 'COACH' | 'MANAGER')}><option value="COACH">COACH</option><option value="MANAGER">MANAGER</option></select></label></div><Button onClick={add} disabled={busy || !displayName.trim() || !email.trim()} icon={<Plus size={16} />}>{busy ? 'جارٍ إنشاء الدعوة…' : 'إنشاء الدعوة'}</Button>{message && <p className="save-status" role="status">{message}</p>}{error && <p className="save-error" role="alert">{error}</p>}</section><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>الاسم الكامل</th><th>البريد الإلكتروني</th><th>الصلاحية</th><th>الحالة</th><th>آخر تسجيل دخول</th><th>الإجراءات</th></tr></thead><tbody>{admins.map((item, index) => <tr key={`${item.uid || item.email}-${index}`}><td>{item.displayName || '—'}</td><td dir="ltr">{item.email}</td><td>{item.role}</td><td><span className="availability-badge">{item.status === 'ACTIVE' ? 'فعال' : item.status === 'DISABLED' ? 'معطل' : 'الدعوة معلقة'}</span></td><td>{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString('ar-IQ') : '—'}</td><td>{item.status !== 'PENDING' && item.uid && <div className="row-actions"><button onClick={() => update(item, 'displayName')}>تعديل الاسم</button><button onClick={() => update(item, 'active', !item.active)}>{item.active ? 'تعطيل' : 'تفعيل'}</button><button onClick={() => update(item, 'role')}>تبديل الدور</button><button onClick={() => update(item, 'remove')}>إزالة</button></div>}</td></tr>)}</tbody></table></div>{!admins.length && <Empty icon={<Users size={28} />} title="لا توجد حسابات إضافية" text="أنشئ دعوة كابتن أو مدير من النموذج أعلاه." />}</section></div>;
+}
+function ProfilePage({ admin }: { admin: AdminProfile }) {
+  const [displayName, setDisplayName] = useState(admin.displayName || '');
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setDisplayName(admin.displayName || ''), [admin.displayName]);
+  const save = async () => { setBusy(true); setStatus('جارٍ حفظ الاسم…'); try { await updateOwnDisplayName(displayName); setStatus('تم حفظ الاسم ومزامنته مع لوحة الإدارة.'); } catch (error) { setStatus(error instanceof Error ? error.message : 'تعذر حفظ الاسم'); } finally { setBusy(false); } };
+  return <div className="profile-page"><section className="panel profile-form"><div className="profile-heading"><div className="avatar large lime">{(displayName || admin.email || '؟').slice(0, 1)}</div><div><h2>الملف الشخصي</h2><p>يمكنك تعديل الاسم فقط. البريد والصلاحية يديرهما النظام.</p></div></div><div className="form-grid"><label>الاسم الكامل<input value={displayName} onChange={e => setDisplayName(e.target.value)} maxLength={200} /></label><label>البريد الإلكتروني<input dir="ltr" value={admin.email || ''} readOnly /></label><label>الصلاحية<input value={admin.role} readOnly /></label></div><Button onClick={save} disabled={busy || !displayName.trim()}>{busy ? 'جارٍ الحفظ…' : 'حفظ التغييرات'}</Button>{status && <p className="save-status" role="status">{status}</p>}<small>آخر تحديث: {admin.updatedAt ? new Date(admin.updatedAt).toLocaleString('ar-IQ') : 'غير متوفر'}</small></section></div>;
 }
 function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved: React.Dispatch<React.SetStateAction<SettingsData>>}) {
   const [values,setValues]=useState(()=>({
