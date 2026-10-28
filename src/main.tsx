@@ -19,7 +19,9 @@ import {
   EyeOff,
   FileText,
   Folder,
+  GripVertical,
   Home,
+  Layers3,
   LogOut,
   Menu,
   Pencil,
@@ -31,6 +33,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Unlink,
   Users,
   X,
 } from "lucide-react";
@@ -176,7 +179,15 @@ type Exercise = {
   description?: string;
   image?: string;
 };
-type MemberExercise = Exercise & { weight?: string; notes?: string };
+type MemberExercise = Exercise & {
+  weight?: string;
+  notes?: string;
+  /** Stable identity for repeated copies of one library exercise in a course. */
+  instanceId?: string;
+  /** Optional visual grouping; legacy exercises omit these fields. */
+  supersetId?: string;
+  supersetOrder?: number;
+};
 type DayPlan = MemberExercise[];
 type Member = {
   id: string;
@@ -188,6 +199,7 @@ type Member = {
   expiresAt?: string;
   courseName?: string;
   notes?: string;
+  dayNotes?: string[];
   photo?: string;
   days: DayPlan[];
   active?: boolean;
@@ -201,7 +213,7 @@ type Member = {
   /** Transient field for initial/reset PIN during member wizard save; never persisted to RTDB. */
   customPin?: string;
 };
-type ReadyCourse = { id: string; name: string; notes?: string; days: DayPlan[] };
+type ReadyCourse = { id: string; name: string; notes?: string; dayNotes?: string[]; days: DayPlan[] };
 type SettingsData = {
   coachName: string;
   gymName: string;
@@ -454,8 +466,8 @@ const read = <T,>(key: string, fallback: T): T => {
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const cloneDays = (days: unknown): DayPlan[] =>
   (Array.isArray(days) ? days : []).map((day) =>
-    Array.isArray(day)
-      ? day
+    (Array.isArray(day) || (day && typeof day === "object" && Array.isArray((day as { exercises?: unknown }).exercises)))
+      ? (Array.isArray(day) ? day : (day as { exercises: unknown[] }).exercises)
           .filter((exercise): exercise is Record<string, unknown> => Boolean(exercise && typeof exercise === "object"))
           .map((exercise) => {
             const item: MemberExercise = {
@@ -472,10 +484,50 @@ const cloneDays = (days: unknown): DayPlan[] =>
             if (typeof exercise.image === "string" && exercise.image) item.image = exercise.image;
             if (typeof exercise.weight === "string" && exercise.weight) item.weight = exercise.weight;
             if (typeof exercise.notes === "string" && exercise.notes) item.notes = exercise.notes;
+            if (typeof exercise.instanceId === "string" && exercise.instanceId.trim()) item.instanceId = exercise.instanceId.trim();
+            if (typeof exercise.supersetId === "string" && exercise.supersetId.trim()) item.supersetId = exercise.supersetId.trim();
+            if (Number.isInteger(exercise.supersetOrder)) item.supersetOrder = Number(exercise.supersetOrder);
             return item;
           })
       : [],
   );
+const cloneDayNotes = (value: unknown, count: number) =>
+  Array.from({ length: count }, (_, index) =>
+    Array.isArray(value) && typeof value[index] === "string" ? value[index].slice(0, 2000) : "",
+  );
+const exerciseInstanceKey = (exercise: MemberExercise) => exercise.instanceId || exercise.id;
+type DayBlock = { kind: "exercise" | "superset"; id: string; items: MemberExercise[] };
+const dayBlocks = (day: DayPlan): DayBlock[] => {
+  const blocks: DayBlock[] = [];
+  day.forEach((exercise) => {
+    if (!exercise.supersetId) {
+      blocks.push({ kind: "exercise", id: exerciseInstanceKey(exercise), items: [exercise] });
+      return;
+    }
+    const previous = blocks[blocks.length - 1];
+    if (previous?.kind === "superset" && previous.id === exercise.supersetId) {
+      previous.items.push(exercise);
+    } else {
+      blocks.push({ kind: "superset", id: exercise.supersetId, items: [exercise] });
+    }
+  });
+  return blocks;
+};
+const flattenDayBlocks = (blocks: DayBlock[]) => blocks.flatMap((block) => block.items);
+const normalizeSetInput = (value: string | number) => {
+  const western = String(value ?? "").replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
+  const parsed = Number(western);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+};
+const validateDayPlans = (days: DayPlan[]) => {
+  for (const day of days) {
+    for (const exercise of day) {
+      if (normalizeSetInput(exercise.sets) < 1) throw new Error(`المجموعات غير صالحة للتمرين: ${exercise.name}`);
+      if (!String(exercise.reps || "").trim()) throw new Error(`التكرارات مطلوبة للتمرين: ${exercise.name}`);
+      if (exercise.supersetId && !exercise.instanceId) throw new Error(`نسخة السوبر تمرين غير معرّفة: ${exercise.name}`);
+    }
+  }
+};
 function normalizeMember(value: unknown): Member | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
@@ -502,6 +554,7 @@ function normalizeMember(value: unknown): Member | null {
     expiresAt: typeof raw.expiresAt === "string" && raw.expiresAt.trim() ? raw.expiresAt.trim() : undefined,
     courseName: typeof raw.courseName === "string" && raw.courseName.trim() ? raw.courseName.trim() : undefined,
     notes: typeof raw.notes === "string" && raw.notes.trim() ? raw.notes.trim() : undefined,
+    dayNotes: cloneDayNotes(raw.dayNotes, Array.isArray(raw.days) ? raw.days.length : 0),
     // Member photos are intentionally unsupported in this release.
     photo: "",
     days: cloneDays(raw.days),
@@ -531,6 +584,7 @@ function memberPersistenceProjection(value: unknown) {
     ...(member.expiresAt ? { expiresAt: member.expiresAt } : {}),
     ...(member.courseName ? { courseName: member.courseName } : {}),
     ...(member.notes ? { notes: member.notes } : {}),
+    dayNotes: cloneDayNotes(member.dayNotes, member.days.length),
     phoneE164: member.phoneE164 || "",
     phoneDisplay: member.phoneDisplay || "",
     photo: "",
@@ -622,6 +676,7 @@ function normalizeCourses(value: unknown): ReadyCourse[] {
         id: String(course.id ?? ""),
         name: String(course.name ?? "كورس بدون اسم"),
         ...(typeof course.notes === "string" && course.notes.trim() ? { notes: course.notes.trim() } : {}),
+        dayNotes: cloneDayNotes(course.dayNotes, Array.isArray(course.days) ? course.days.length : 0),
         days: cloneDays(course.days),
       }))
       .filter((course) => course.id),
@@ -2466,6 +2521,7 @@ function CourseWizard({
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
   const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
+  const [dayNotes, setDayNotes] = useState<string[]>(cloneDayNotes(initial?.dayNotes, initial?.days.length || 3));
   const [selected, setSelected] = useState<DayPlan[]>(
     initial ? cloneDays(initial.days) : blankDays(3),
   );
@@ -2474,6 +2530,7 @@ function CourseWizard({
       setSelected((x) => Array.from({ length: days }, (_, i) => x[i] || [])),
     [days],
   );
+  useEffect(() => setDayNotes((x) => Array.from({ length: days }, (_, i) => x[i] || "")), [days]);
   const add = (e: Exercise) =>
     setSelected((x) =>
       x.map((list, i) =>
@@ -2484,9 +2541,9 @@ function CourseWizard({
           : list,
       ),
     );
-  const remove = (id: string) =>
+  const remove = (key: string) =>
     setSelected((x) =>
-      x.map((list, i) => (i === day ? list.filter((e) => e.id !== id) : list)),
+      x.map((list, i) => (i === day ? list.filter((e) => exerciseInstanceKey(e) !== key) : list)),
     );
   const move = (index: number, direction: -1 | 1) =>
     setSelected((x) =>
@@ -2505,13 +2562,40 @@ function CourseWizard({
       x.map((list, i) =>
         i === day
           ? list.map((e) =>
-              e.id === id
+              exerciseInstanceKey(e) === id
                  ? { ...e, [key]: value }
                 : e,
             )
           : list,
       ),
     );
+  const moveBlock = (blockIndex: number, direction: -1 | 1) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const blocks = dayBlocks(list); const target = blockIndex + direction;
+    if (target < 0 || target >= blocks.length) return list;
+    [blocks[blockIndex], blocks[target]] = [blocks[target], blocks[blockIndex]];
+    return flattenDayBlocks(blocks);
+  }));
+  const moveSupersetItem = (groupId: string, key: string, direction: -1 | 1) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const indexes = list.map((exercise, index) => exercise.supersetId === groupId ? index : -1).filter((index) => index >= 0);
+    const current = indexes.findIndex((index) => exerciseInstanceKey(list[index]) === key); const target = current + direction;
+    if (current < 0 || target < 0 || target >= indexes.length) return list;
+    const copy = [...list]; [copy[indexes[current]], copy[indexes[target]]] = [copy[indexes[target]], copy[indexes[current]]];
+    return copy.map((exercise, index) => exercise.supersetId === groupId ? { ...exercise, supersetOrder: indexes.indexOf(index) } : exercise);
+  }));
+  const addToSuperset = (targetKey: string, candidate: Exercise) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const target = list.find((exercise) => exerciseInstanceKey(exercise) === targetKey);
+    if (!target) return list;
+    const groupId = target.supersetId || `superset-${uid()}`;
+    const next = list.map((exercise) => exercise.supersetId === groupId || exerciseInstanceKey(exercise) === targetKey ? { ...exercise, instanceId: exercise.instanceId || uid(), supersetId: groupId } : exercise);
+    const order = next.filter((exercise) => exercise.supersetId === groupId).length;
+    const insertAt = Math.max(...next.map((exercise, index) => exercise.supersetId === groupId ? index : -1));
+    const copy = { ...candidate, instanceId: uid(), supersetId: groupId, supersetOrder: order };
+    return [...next.slice(0, insertAt + 1), copy, ...next.slice(insertAt + 1)];
+  }));
+  const detach = (key: string) => setSelected((x) => x.map((list, i) => i === day ? list.map((exercise) => exerciseInstanceKey(exercise) === key ? (({ supersetId: _group, supersetOrder: _order, ...rest }) => rest)(exercise) : exercise) : list));
   return (
     <Modal title={title} onClose={onClose} wide>
       <WizardSteps step={step} />
@@ -2585,22 +2669,29 @@ function CourseWizard({
           add={add}
           update={update}
           remove={remove}
-          move={move}
+          moveBlock={moveBlock}
+          moveSupersetItem={moveSupersetItem}
+          addToSuperset={addToSuperset}
+          detach={detach}
+          dayNote={dayNotes[day] || ""}
+          setDayNote={(value) => setDayNotes((x) => x.map((note, i) => i === day ? value : note))}
         />
       )}{" "}
-      {step === 4 && <Review name={name} notes={notes} days={days} selected={selected} />}
+      {step === 4 && <Review name={name} notes={notes} dayNotes={dayNotes} days={days} selected={selected} />}
       <WizardActions
         step={step}
         setStep={setStep}
         onClose={onClose}
-        save={() =>
+        save={() => {
+          validateDayPlans(selected.slice(0, days));
           onSave({
             id: initial?.id || uid(),
             name: name.trim() || "كورس بدون اسم",
             ...(notes.trim() ? { notes: notes.trim() } : {}),
+            dayNotes: cloneDayNotes(dayNotes, days),
             days: cloneDays(selected.slice(0, days)),
-          })
-        }
+          });
+        }}
       />
     </Modal>
   );
@@ -2631,7 +2722,12 @@ function Picker({
   add,
   update,
   remove,
-  move,
+  moveBlock,
+  moveSupersetItem,
+  addToSuperset,
+  detach,
+  dayNote,
+  setDayNote,
   disabled = false,
 }: {
   days: number;
@@ -2645,15 +2741,48 @@ function Picker({
   add: (e: Exercise) => void;
   update: (id: string, key: keyof MemberExercise, value: string) => void;
   remove: (id: string) => void;
-  move?: (index: number, direction: -1 | 1) => void;
+  moveBlock: (index: number, direction: -1 | 1) => void;
+  moveSupersetItem: (groupId: string, key: string, direction: -1 | 1) => void;
+  addToSuperset: (targetKey: string, candidate: Exercise) => void;
+  detach: (key: string) => void;
+  dayNote: string;
+  setDayNote: (value: string) => void;
   disabled?: boolean;
 }) {
+  const [query, setQuery] = useState("");
+  const [supersetTarget, setSupersetTarget] = useState<string | null>(null);
+  const [libraryMuscle, setLibraryMuscle] = useState(muscle);
+  const currentDay = selected[day] || [];
+  const blocks = dayBlocks(currentDay);
+  const filteredExercises = exercises.filter((exercise) => {
+    const matchesMuscle = libraryMuscle === "الكل" || normalizeMuscle(exercise.muscle) === libraryMuscle || exercise.muscle === libraryMuscle;
+    const needle = query.trim().toLowerCase();
+    return matchesMuscle && (!needle || `${exercise.name} ${exercise.english || ""}`.toLowerCase().includes(needle));
+  });
+  const updateSets = (key: string, value: string) => update(key, "sets", value.replace(/[^0-9٠-٩]/g, ""));
+  const exerciseEditor = (exercise: MemberExercise, groupId?: string, groupIndex?: number) => {
+    const key = exerciseInstanceKey(exercise);
+    return <div className="course-exercise-editor" key={`${key}-${groupIndex ?? 0}`}>
+      <div className="course-exercise-media">{exercise.image ? <img src={exercise.image} alt="" /> : <Dumbbell size={28} />}</div>
+      <div className="course-exercise-copy"><strong>{exercise.name}</strong><span>{exercise.muscle}</span>{exercise.video && <small><Play size={12} /> رابط شرح محفوظ</small>}</div>
+      <label>المجموعات<input disabled={disabled} inputMode="numeric" value={exercise.sets} onChange={(event) => updateSets(key, event.target.value)} /></label>
+      <label>التكرارات<input disabled={disabled} dir="ltr" className="reps-input" value={exercise.reps} onChange={(event) => update(key, "reps", event.target.value)} /></label>
+      <div className="course-exercise-actions">
+        {!disabled && groupId && <><button type="button" title="تحريك داخل السوبر" disabled={groupIndex === 0} onClick={() => moveSupersetItem(groupId, key, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك داخل السوبر" disabled={groupIndex === undefined} onClick={() => moveSupersetItem(groupId, key, 1)}><ArrowDown size={15} /></button><button type="button" title="فصل التمرين" onClick={() => detach(key)}><Unlink size={15} /></button></>}
+        {!disabled && <button type="button" className="course-remove-button" title="إزالة التمرين" onClick={() => remove(key)}><Trash2 size={15} /></button>}
+      </div>
+    </div>;
+  };
   return (
-    <div className="wizard-pane">
-      <h3>تمارين اليوم {day + 1}</h3>
-      <div className="day-switch">
+    <div className="course-editor-workspace">
+      <div className="course-editor-daybar">
+        <div><span className="section-kicker">الخطة الأسبوعية</span><h3>تمارين اليوم {day + 1}</h3></div>
+        <div className="day-switch" role="tablist" aria-label="أيام الكورس">
         {Array.from({ length: days }, (_, i) => (
           <button
+            type="button"
+            role="tab"
+            aria-selected={day === i}
             className={day === i ? "active" : ""}
             onClick={() => setDay(i)}
             key={i}
@@ -2662,121 +2791,43 @@ function Picker({
             <small>{selected[i]?.length || 0} تمارين</small>
           </button>
         ))}
-      </div>
-      <div className="picker-layout">
-        <div className="picker-muscles">
-          {muscleList.map((m) => (
-            <button
-              className={muscle === m ? "active" : ""}
-              onClick={() => setMuscle(m)}
-              key={m}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-        <div className="picker-exercises">
-          {exercises
-            .filter((e) => normalizeMuscle(e.muscle) === muscle || e.muscle === muscle)
-            .map((e) => (
-              <button
-                disabled={disabled}
-                className={
-                  selected[day]?.some((x) => x.id === e.id) ? "picked" : ""
-                }
-                onClick={() => add(e)}
-                key={e.id}
-              >
-                <span>
-                  {selected[day]?.some((x) => x.id === e.id) ? (
-                    <Check size={15} />
-                  ) : (
-                    <Plus size={15} />
-                  )}
-                </span>
-                <b>{e.name}</b>
-                <small>
-                  {e.sets} × {e.reps} · راحة {e.rest} · {safeVideoUrl(e.video) ? "رابط شرح" : "QR عند الطباعة"}
-                </small>
-              </button>
-            ))}
         </div>
       </div>
-      {selected[day]?.length > 0 && (
-        <div className="selected-exercises">
-          {selected[day].map((e, idx) => (
-            <div key={e.id} className="selected-exercise-row">
-              <div>
-                <b>{idx + 1}. {e.name}</b>
-                <small>
-                  {e.muscle} · {e.sets} × {e.reps} · راحة {e.rest}
-                </small>
-              </div>
-              <label>
-                مجموعات
-                <input
-                  disabled={disabled}
-                  value={e.sets}
-                  onChange={(x) => update(e.id, "sets", x.target.value)}
-                />
-              </label>
-              <label>
-                تكرارات
-                <input
-                  disabled={disabled}
-                  value={e.reps}
-                  onChange={(x) => update(e.id, "reps", x.target.value)}
-                />
-              </label>
-              <label>
-                الراحة
-                <input
-                  disabled={disabled}
-                  value={e.rest}
-                  onChange={(x) => update(e.id, "rest", x.target.value)}
-                />
-              </label>
-              <label>
-                ملاحظات
-                <input
-                  disabled={disabled}
-                  placeholder="ملاحظة للتمرين"
-                  value={e.notes || ""}
-                  onChange={(x) => update(e.id, "notes", x.target.value)}
-                />
-              </label>
-              {!disabled && (
-                <div className="exercise-order-actions">
-                  {move && (
-                    <>
-                      <button type="button" className="row-icon" title="تحريك لأعلى" disabled={idx === 0} onClick={() => move(idx, -1)}>
-                        <ArrowUp size={14} />
-                      </button>
-                      <button type="button" className="row-icon" title="تحريك لأسفل" disabled={idx === selected[day].length - 1} onClick={() => move(idx, 1)}>
-                        <ArrowDown size={14} />
-                      </button>
-                    </>
-                  )}
-                  <button type="button" className="row-icon" title="حذف التمرين من اليوم" onClick={() => remove(e.id)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="course-editor-grid">
+        <section className="exercise-library-pane" aria-labelledby="exercise-library-title">
+          <div className="course-pane-heading"><div><span className="section-kicker">المكتبة</span><h4 id="exercise-library-title">إضافة تمرين</h4></div><span>{filteredExercises.length} نتيجة</span></div>
+          <label className="course-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="البحث عن تمرين..." aria-label="البحث عن تمرين" /></label>
+          <select className="course-muscle-select" value={libraryMuscle} onChange={(event) => setLibraryMuscle(event.target.value)} aria-label="تصفية حسب العضلة"><option value="الكل">كل العضلات</option>{muscleList.map((item) => <option value={item} key={item}>{item}</option>)}</select>
+          <div className="exercise-library-list">
+            {filteredExercises.map((exercise) => {
+              const picked = currentDay.some((item) => item.id === exercise.id);
+              return <button type="button" disabled={disabled} className={picked ? "library-exercise-card picked" : "library-exercise-card"} onClick={() => add(exercise)} key={exercise.id}><span className="library-exercise-image">{exercise.image ? <img src={exercise.image} alt="" /> : <Dumbbell size={22} />}</span><span className="library-exercise-content"><strong>{exercise.name}</strong><small>{exercise.muscle} · {exercise.sets} مجموعات · {exercise.reps} تكرارات</small></span><span className="library-exercise-add">{picked ? <Check size={17} /> : <Plus size={17} />}</span></button>;
+            })}
+          </div>
+        </section>
+        <section className="day-workout-pane" aria-labelledby="day-workout-title">
+          <div className="course-pane-heading"><div><span className="section-kicker">التحرير</span><h4 id="day-workout-title">تمارين اليوم {day + 1}</h4></div><span>{currentDay.length} تمارين</span></div>
+          <label className="coach-day-note"><span><CircleAlert size={16} /> ملاحظات الكابتن</span><textarea disabled={disabled} value={dayNote} onChange={(event) => setDayNote(event.target.value)} placeholder="مثال: جري 5 دقايق + تمارين معدة" maxLength={2000} /></label>
+          <div className="selected-exercise-stack">
+            {!blocks.length && <div className="course-empty-exercises"><Dumbbell size={27} /><strong>لم تتم إضافة تمارين لهذا اليوم</strong><span>اختر تمريناً من المكتبة ليظهر هنا.</span></div>}
+            {blocks.map((block, blockIndex) => block.kind === "superset" ? <article className="superset-editor-card" key={block.id}><header><div><span className="superset-badge"><Layers3 size={15} /> سوبر تمرين</span><strong>مجموعة {blockIndex + 1}</strong><small>{block.items.length} تمارين مترابطة</small></div><div className="block-order-actions">{!disabled && <><button type="button" title="تحريك المجموعة للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك المجموعة للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button></>}</div></header><div className="superset-editor-items">{block.items.map((exercise, index) => <div key={`${exerciseInstanceKey(exercise)}-${index}`} className="superset-editor-item">{exerciseEditor(exercise, block.id, index)}{index < block.items.length - 1 && <div className="superset-divider" aria-hidden="true"><span>+</span></div>}</div>)}</div><button type="button" className="add-to-superset-button" disabled={disabled} onClick={() => setSupersetTarget(block.items[0] ? exerciseInstanceKey(block.items[0]) : null)}><Plus size={16} /> إضافة تمرين إلى السوبر</button></article> : <article className="selected-exercise-card" key={block.id}><div className="selected-card-top"><GripVertical size={18} className="drag-hint" /><span className="selected-card-number">{blockIndex + 1}</span>{exerciseEditor(block.items[0])}<div className="selected-card-toolbar">{!disabled && <><button type="button" title="تحريك للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button><button type="button" className="add-superset-inline" onClick={() => setSupersetTarget(exerciseInstanceKey(block.items[0]))}><Plus size={15} /> تمرين</button></>}</div></div></article>)}
+          </div>
+        </section>
+      </div>
+      {supersetTarget && <div className="superset-picker-overlay" role="dialog" aria-modal="true" aria-label="إضافة تمرين إلى السوبر"><div className="superset-picker-card"><header><div><span className="section-kicker">اختيار من المكتبة</span><h4>إضافة تمرين إلى السوبر</h4></div><button type="button" className="icon-btn" onClick={() => setSupersetTarget(null)} aria-label="إغلاق"><X size={18} /></button></header><label className="course-search"><Search size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث داخل التمارين..." /></label><div className="superset-picker-list">{filteredExercises.map((exercise) => <button type="button" disabled={disabled} onClick={() => { addToSuperset(supersetTarget, exercise); setSupersetTarget(null); }} key={`${exercise.id}-superset`}><span>{exercise.image ? <img src={exercise.image} alt="" /> : <Dumbbell size={20} />}</span><strong>{exercise.name}</strong><small>{exercise.muscle} · {exercise.reps}</small><Plus size={17} /></button>)}</div></div></div>}
     </div>
   );
 }
 function Review({
   name,
   notes,
+  dayNotes,
   days,
   selected,
 }: {
   name: string;
   notes?: string;
+  dayNotes: string[];
   days: number;
   selected: DayPlan[];
 }) {
@@ -2792,11 +2843,10 @@ function Review({
           <h4>
             اليوم {i + 1} <small>{list.length} تمارين</small>
           </h4>
+          {dayNotes[i] && <p className="review-day-note"><b>ملاحظات:</b> {dayNotes[i]}</p>}
           {list.length ? (
-            list.map((e) => (
-              <span key={e.id}>
-                 {e.name} · {e.sets} × {e.reps}{e.notes ? ` — ${e.notes}` : ""}
-              </span>
+            dayBlocks(list).map((block) => (
+              <div className={block.kind === "superset" ? "review-superset" : "review-exercise-group"} key={block.id}>{block.kind === "superset" && <b className="review-superset-title"><Layers3 size={13} /> سوبر تمرين</b>}{block.items.map((e) => <span key={exerciseInstanceKey(e)}>{e.name} · {e.sets} × {e.reps}{e.notes ? ` — ${e.notes}` : ""}</span>)}</div>
             ))
           ) : (
             <em>لم تتم إضافة تمارين</em>
@@ -3173,6 +3223,7 @@ function MemberWizard({
   const [days, setDays] = useState(initial?.days.length || 3);
   const [day, setDay] = useState(0);
   const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
+  const [dayNotes, setDayNotes] = useState<string[]>(cloneDayNotes(initial?.dayNotes, initial?.days.length || 3));
   const [selected, setSelected] = useState<DayPlan[]>(
     initial ? cloneDays(initial.days) : blankDays(3),
   );
@@ -3181,6 +3232,13 @@ function MemberWizard({
       setSelected((x) => Array.from({ length: days }, (_, i) => x[i] || [])),
     [days],
   );
+  useEffect(() => setDayNotes((x) => Array.from({ length: days }, (_, i) => x[i] || "")), [days]);
+  const initialWizardSnapshot = useRef(stableJson({ name, membershipId, phone, active, height, weight, createdAt, expiresAt, courseName, notes, days, selected, dayNotes }));
+  const closeEditor = () => {
+    const changed = stableJson({ name, membershipId, phone, active, height, weight, createdAt, expiresAt, courseName, notes, days, selected, dayNotes }) !== initialWizardSnapshot.current;
+    if (!viewOnly && changed && !window.confirm("توجد تغييرات غير محفوظة. هل تريد إغلاق المحرر؟")) return;
+    onClose();
+  };
   const applyReadyCourse = (templateId: string) => {
     const found = courses.find((c) => c.id === templateId);
     if (!found) return;
@@ -3188,6 +3246,7 @@ function MemberWizard({
     if (found.notes && !notes) setNotes(found.notes);
     const cloned = cloneDays(found.days);
     setDays(Math.max(1, cloned.length));
+    setDayNotes(cloneDayNotes(found.dayNotes, Math.max(1, cloned.length)));
     setSelected(cloned);
     setDay(0);
   };
@@ -3201,9 +3260,9 @@ function MemberWizard({
           : list,
       ),
     );
-  const remove = (id: string) =>
+  const remove = (key: string) =>
     setSelected((x) =>
-      x.map((list, i) => (i === day ? list.filter((e) => e.id !== id) : list)),
+      x.map((list, i) => (i === day ? list.filter((e) => exerciseInstanceKey(e) !== key) : list)),
     );
   const move = (index: number, direction: -1 | 1) =>
     setSelected((x) =>
@@ -3222,23 +3281,44 @@ function MemberWizard({
       x.map((list, i) =>
         i === day
           ? list.map((e) =>
-              e.id === id
-                ? { ...e, [key]: key === "sets" ? Number(value) : value }
+              exerciseInstanceKey(e) === id
+                ? { ...e, [key]: value }
                 : e,
             )
           : list,
       ),
     );
+  const moveBlock = (blockIndex: number, direction: -1 | 1) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const blocks = dayBlocks(list); const target = blockIndex + direction;
+    if (target < 0 || target >= blocks.length) return list;
+    [blocks[blockIndex], blocks[target]] = [blocks[target], blocks[blockIndex]];
+    return flattenDayBlocks(blocks);
+  }));
+  const moveSupersetItem = (groupId: string, key: string, direction: -1 | 1) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const indexes = list.map((exercise, index) => exercise.supersetId === groupId ? index : -1).filter((index) => index >= 0);
+    const current = indexes.findIndex((index) => exerciseInstanceKey(list[index]) === key); const target = current + direction;
+    if (current < 0 || target < 0 || target >= indexes.length) return list;
+    const copy = [...list]; [copy[indexes[current]], copy[indexes[target]]] = [copy[indexes[target]], copy[indexes[current]]];
+    return copy.map((exercise, index) => exercise.supersetId === groupId ? { ...exercise, supersetOrder: indexes.indexOf(index) } : exercise);
+  }));
+  const addToSuperset = (targetKey: string, candidate: Exercise) => setSelected((x) => x.map((list, i) => {
+    if (i !== day) return list;
+    const target = list.find((exercise) => exerciseInstanceKey(exercise) === targetKey);
+    if (!target) return list;
+    const groupId = target.supersetId || `superset-${uid()}`;
+    const next = list.map((exercise) => exercise.supersetId === groupId || exerciseInstanceKey(exercise) === targetKey ? { ...exercise, instanceId: exercise.instanceId || uid(), supersetId: groupId } : exercise);
+    const order = next.filter((exercise) => exercise.supersetId === groupId).length;
+    const insertAt = Math.max(...next.map((exercise, index) => exercise.supersetId === groupId ? index : -1));
+    const copy = { ...candidate, instanceId: uid(), supersetId: groupId, supersetOrder: order };
+    return [...next.slice(0, insertAt + 1), copy, ...next.slice(insertAt + 1)];
+  }));
+  const detach = (key: string) => setSelected((x) => x.map((list, i) => i === day ? list.map((exercise) => exerciseInstanceKey(exercise) === key ? (({ supersetId: _group, supersetOrder: _order, ...rest }) => rest)(exercise) : exercise) : list));
   return (
     <Modal
-      title={
-        viewOnly
-          ? "عرض كورس المشترك"
-          : initial
-            ? "تعديل كورس المشترك"
-            : "إنشاء مشترك جديد"
-      }
-      onClose={onClose}
+      title={`${viewOnly ? "عرض كورس المشترك" : initial ? "تعديل كورس المشترك" : "إنشاء مشترك جديد"}${name.trim() ? ` — ${name.trim()}` : ""}`}
+      onClose={closeEditor}
       wide
     >
       <WizardSteps step={step} />
@@ -3418,15 +3498,20 @@ function MemberWizard({
           add={add}
           update={update}
           remove={remove}
-          move={move}
+          moveBlock={moveBlock}
+          moveSupersetItem={moveSupersetItem}
+          addToSuperset={addToSuperset}
+          detach={detach}
+          dayNote={dayNotes[day] || ""}
+          setDayNote={(value) => setDayNotes((x) => x.map((note, i) => i === day ? value : note))}
           disabled={viewOnly}
         />
       )}{" "}
-      {step === 4 && <Review name={name} notes={notes} days={days} selected={selected} />}
+      {step === 4 && <Review name={name} notes={notes} dayNotes={dayNotes} days={days} selected={selected} />}
       <div className="modal-actions">
         <Button
           secondary
-          onClick={step === 1 ? onClose : () => setStep(step - 1)}
+          onClick={step === 1 ? closeEditor : () => setStep(step - 1)}
         >
           {step === 1 ? "إغلاق" : "السابق"}
         </Button>
@@ -3447,6 +3532,7 @@ function MemberWizard({
                   throw new Error("رمز PIN المخصص يجب أن يتكون من 4 أرقام بالضبط");
                 }
                 setValidationError("");
+                validateDayPlans(selected.slice(0, days));
                 setSaving(true);
                 await onSave({
                   id: initial?.id || uid(),
@@ -3458,6 +3544,7 @@ function MemberWizard({
                   ...(expiresAt.trim() ? { expiresAt: expiresAt.trim() } : {}),
                   ...(courseName.trim() ? { courseName: courseName.trim() } : {}),
                   ...(notes.trim() ? { notes: notes.trim() } : {}),
+                  dayNotes: cloneDayNotes(dayNotes, days),
                   phoneE164: normalizedMemberPhone,
                   phoneDisplay: displayIraqiPhone(normalizedMemberPhone),
                   days: cloneDays(selected.slice(0, days)),
@@ -3500,6 +3587,7 @@ function MemberPortal({
   const [done, setDone] = useState<string[]>([]);
   const list = m.days[day] || [];
   const dayMuscles = [...new Set(list.map((e) => e.muscle))].filter(Boolean).join(" + ");
+  const currentDayNote = m.dayNotes?.[day]?.trim() || "";
   const instagramUrl = socialUrl("instagram", s.instagram);
   const whatsappUrl = socialUrl("whatsapp", s.whatsapp || s.phone);
   return (
@@ -3554,17 +3642,23 @@ function MemberPortal({
             </div>
             <div id={`member-day-panel-${day}`} role="tabpanel" className="member-day-panel" aria-label={`تمارين اليوم ${day + 1}`}>
               {dayMuscles && <div className="member-muscle-line"><span>العضلات المستهدفة</span><strong>{dayMuscles}</strong></div>}
+              {currentDayNote && <div className="member-day-note"><CircleAlert size={17} /><span><b>ملاحظات الكابتن</b>{currentDayNote}</span></div>}
               <div className="member-exercise-list">
-                {list.length ? list.map((e, idx) => {
+                {list.length ? dayBlocks(list).map((block, blockIndex) => {
+                  const renderExercise = (e: MemberExercise, idx: number) => {
+                  const exerciseKey = exerciseInstanceKey(e);
                   const videoId = youtubeVideoId(e.video);
                   const exerciseHref = exerciseUrl(e.id);
-                  return <article className={done.includes(e.id) ? "member-exercise-card completed" : "member-exercise-card"} key={`${e.id}-${idx}`}>
-                    <div className="exercise-card-header"><button aria-label={`تحديد إنجاز ${e.name}`} className={done.includes(e.id) ? "exercise-check checked" : "exercise-check"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>{done.includes(e.id) && <Check size={16} />}</button><div><span className="exercise-number">تمرين {idx + 1}</span><h3>{e.name}</h3><p>{e.muscle}</p></div></div>
+                  return <article className={done.includes(exerciseKey) ? "member-exercise-card completed" : "member-exercise-card"} key={`${exerciseKey}-${blockIndex}-${idx}`}>
+                    <div className="exercise-card-header"><button aria-label={`تحديد إنجاز ${e.name}`} className={done.includes(exerciseKey) ? "exercise-check checked" : "exercise-check"} onClick={() => setDone((x) => x.includes(exerciseKey) ? x.filter((i) => i !== exerciseKey) : [...x, exerciseKey])}>{done.includes(exerciseKey) && <Check size={16} />}</button><div><span className="exercise-number">تمرين {idx + 1}</span><h3>{e.name}</h3><p>{e.muscle}</p></div></div>
                     {e.image && <img className="member-exercise-image" src={e.image} alt={`صورة توضيحية لـ ${e.name}`} loading="lazy" />}
                     {(e.description || e.notes) && <p className="member-exercise-note">{e.notes && <b>ملاحظة: </b>}{e.notes || e.description}</p>}
-                    <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /><Metric label="الراحة" value={e.rest || "—"} /></div>
+                    <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /></div>
                     <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {videoId ? "مشاهدة شرح التمرين" : "فتح بطاقة التمرين"}</a>{s.showBarcodes && <a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a>}</div>
                   </article>;
+                  };
+                  if (block.kind === "superset") return <section className="member-superset-card" key={block.id}><header><Layers3 size={18} /><strong>سوبر تمرين {blockIndex + 1}</strong><span>{block.items.length} تمارين مترابطة</span></header><div className="member-superset-items">{block.items.map((exercise, index) => <div className="member-superset-item" key={`${exerciseInstanceKey(exercise)}-${index}`}>{renderExercise(exercise, index)}{index < block.items.length - 1 && <div className="superset-plus" aria-hidden="true">+</div>}</div>)}</div></section>;
+                  return renderExercise(block.items[0], blockIndex);
                 }) : <Empty icon={<Dumbbell size={28} />} title="لا توجد تمارين لهذا اليوم" text="يمكنك اختيار يوم آخر من الخطة." />}
               </div>
             </div>
@@ -4123,7 +4217,19 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
   const courseQrMarkup = s.showBarcodes
     ? `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={memberLoginUrl()} size={76} includeMargin level="M" />)}<strong>امسح الرمز للدخول إلى حسابك وعرض جدول تمارينك</strong></div>`
     : "";
-  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="exercise-name"><strong>${n + 1}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td><td>${escapeHtml(e.rest || "—")}</td>${qrMarkup(e)}</tr>`).join("");
+  const rows = (day: DayPlan) => {
+    let number = 0;
+    return dayBlocks(day).map((block) => {
+      const label = block.kind === "superset"
+        ? `<tr class="superset-label"><td colspan="${s.showBarcodes ? 4 : 3}"><strong>سوبر تمرين</strong><small>مجموعة مترابطة · ${block.items.length} تمارين</small></td>${s.showBarcodes ? "<td></td>" : ""}</tr>`
+        : "";
+      const items = block.items.map((e) => {
+        number += 1;
+        return `<tr class="${block.kind === "superset" ? "superset-row" : ""}"><td class="exercise-name"><strong>${number}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td>${qrMarkup(e)}</tr>`;
+      }).join("");
+      return label + items;
+    }).join("");
+  };
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
@@ -4138,7 +4244,8 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
     @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:46%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:15%}.day th:nth-child(3),.day td:nth-child(3){width:18%}.day th:nth-child(4),.day td:nth-child(4){width:15%}.day th:nth-child(5),.day td:nth-child(5){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.footer .social{display:inline-flex;align-items:center;gap:1.5mm}.footer .social-icon{display:inline-grid;place-items:center}.footer .social svg{width:4mm;height:4mm}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
   </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
     const dayMuscles = [...new Set(day.map((e) => e.muscle))].filter(Boolean).join(" + ");
-     return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th><th>الراحة</th>${s.showBarcodes ? "<th>QR</th>" : ""}</tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
+     const note = m.dayNotes?.[i]?.trim() ? `<div class="day-note"><strong>ملاحظات الكابتن</strong><span>${escapeHtml(m.dayNotes[i])}</span></div>` : "";
+     return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${note}${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th>${s.showBarcodes ? "<th>QR</th>" : ""}</tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
   }).join("")}${s.showBarcodes ? `<div class="login-qr">${courseQrMarkup}</div>` : ""}<footer class="footer">${socialFooter}${s.address ? `<span>${escapeHtml(s.address)}</span>` : ""}${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=r;i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
 }
 function PrintPreviewModal({
