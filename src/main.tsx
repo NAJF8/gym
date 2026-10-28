@@ -989,7 +989,7 @@ function CentralDataBridge({
           );
         if (
           role === "SUPER_ADMIN" &&
-          JSON.stringify(check.settings) !== JSON.stringify(nextPayload.settings)
+          stableJson(check.settings) !== stableJson(nextPayload.settings)
         )
           throw firebaseSyncError(
             "verify",
