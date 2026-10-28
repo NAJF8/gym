@@ -78,3 +78,5 @@ jobs:
         run: npm run verify:deployment:staging
       - name: Deploy staging site
         run: npx -y firebase-tools@latest deploy --only hosting --project "${{ vars.VITE_FIREBASE_PROJECT_ID }}"
+      - name: Verify live staging bundle and environment isolation
+        run: npm run verify:live:staging

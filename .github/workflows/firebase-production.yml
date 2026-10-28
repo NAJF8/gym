@@ -52,3 +52,5 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GYM1_4F1BB }}
           channelId: live
           projectId: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+      - name: Verify live production bundle and environment isolation
+        run: npm run verify:live:production

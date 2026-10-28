@@ -11,6 +11,8 @@
     "build:pages": "tsc -b && vite build --mode pages",
     "verify:deployment:staging": "node scripts/deployment-guard.mjs --environment=staging --project=alasas-fit-staging --site=alasas-fit-staging",
     "verify:deployment:production": "node scripts/deployment-guard.mjs --environment=production --project=gym1-4f1bb --site=gym1-4f1bb",
+    "verify:live:staging": "node scripts/live-deployment-guard.mjs --environment=staging",
+    "verify:live:production": "node scripts/live-deployment-guard.mjs --environment=production",
     "preview": "vite preview",
     "test": "npm run test:rules && npm run test:video && npm run test:pin && npm run test:members && npm run test:invites && npm run test:library && npm run test:day-notes",
     "test:video": "node --experimental-strip-types --test tests/video-url.test.mjs",
