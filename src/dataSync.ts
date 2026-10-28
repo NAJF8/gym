@@ -80,6 +80,13 @@ export function stripUndefined<T>(value: T): T {
   return value;
 }
 
+/** Preserve one independent, bounded note per training day in public read-only projections. */
+function normalizeDayNotes(value: unknown, count: number) {
+  return Array.from({ length: count }, (_, index) =>
+    Array.isArray(value) && typeof value[index] === "string" ? value[index].slice(0, 2000) : "",
+  );
+}
+
 export function backupLocalSnapshot<T>(payload: T) {
   const key = `alasas-local-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   localStorage.setItem(key, JSON.stringify(payload));
@@ -413,6 +420,7 @@ export async function writeAdminData<T>(
       id: String(course.id || ""),
       name: String(course.name || "كورس تدريبي"),
       notes: typeof course.notes === "string" ? course.notes.slice(0, 1000) : "",
+      dayNotes: normalizeDayNotes(course.dayNotes, Array.isArray(course.days) ? course.days.length : 0),
       days: Array.isArray(course.days) ? course.days : [],
     });
   const nextPublicCourses = new Map<string, Record<string, unknown>>();
@@ -426,6 +434,7 @@ export async function writeAdminData<T>(
         id: cid,
         name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
         notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        dayNotes: normalizeDayNotes(m.dayNotes, Array.isArray(m.days) ? m.days.length : 0),
         days: Array.isArray(m.days) ? m.days : [],
       }));
     }
@@ -441,6 +450,7 @@ export async function writeAdminData<T>(
         id: cid,
         name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
         notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
+        dayNotes: normalizeDayNotes(m.dayNotes, Array.isArray(m.days) ? m.days.length : 0),
         days: Array.isArray(m.days) ? m.days : [],
       }));
     }
@@ -461,6 +471,10 @@ export async function writeAdminData<T>(
       height: member.height || "",
       weight: member.weight || "",
       createdAt: member.createdAt || "",
+      ...(typeof member.expiresAt === "string" && member.expiresAt ? { expiresAt: member.expiresAt } : {}),
+      ...(typeof member.courseName === "string" && member.courseName ? { courseName: member.courseName } : {}),
+      ...(typeof member.notes === "string" && member.notes ? { notes: member.notes.slice(0, 1000) } : {}),
+      dayNotes: normalizeDayNotes(member.dayNotes, Array.isArray(member.days) ? member.days.length : 0),
       days: member.days || [],
       active: member.active !== false,
     });
