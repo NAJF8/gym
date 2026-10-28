@@ -321,3 +321,4 @@ html,body,#root{max-width:100%;overflow-x:hidden}
   .selected-exercises>.selected-exercise-row>div:first-child{grid-column:1/-1}
   .category-mini-actions{display:none}
 }
+ .table-feedback{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 0;color:#6b7280;font-size:11px}.table-feedback.error-state{color:#b42318}.table-feedback.error-state span{flex-basis:100%}.table-feedback .primary-btn{margin-inline-start:auto}
