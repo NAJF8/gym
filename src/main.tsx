@@ -58,6 +58,7 @@ import {
   watchAdminData,
   watchPublicExercise,
   watchPublicCourse,
+  watchPublicSettings,
   writeAdminData,
   saveManagerPrintSettings,
   deleteAdminMember,
@@ -100,7 +101,23 @@ function MemberPinGate(){
   const [phone,setPhone]=useState('');
   const [pin,setPin]=useState('');
   const [showPin,setShowPin]=useState(false);
+  const [memberSettings, setMemberSettings] = useState<SettingsData>(() => ({ ...defaults, showBarcodes: false }));
+  const [memberSettingsReady, setMemberSettingsReady] = useState(!firebaseConfigured);
   const submittingRef=useRef(false);
+
+  useEffect(() => watchPublicSettings<{ showBarcodes?: unknown }>((value) => {
+    setMemberSettings((current) => ({
+      ...current,
+      // Existing deployments without the projection retain the historical ON
+      // behavior, but only after the remote read has completed.
+      showBarcodes: typeof value?.showBarcodes === "boolean" ? value.showBarcodes : true,
+    }));
+    setMemberSettingsReady(true);
+  }, () => {
+    // A failed read must fail closed so a stale/default value cannot expose QR.
+    setMemberSettings((current) => ({ ...current, showBarcodes: false }));
+    setMemberSettingsReady(true);
+  }), []);
 
   useEffect(()=>{
     const savedToken = (() => { try { return sessionStorage.getItem(MEMBER_SESSION_STORAGE_KEY) || ''; } catch { return ''; } })();
@@ -139,7 +156,7 @@ function MemberPinGate(){
   if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;
   if(restoring)return <AuthNotice title="جارٍ استعادة جلسة المشترك" text="يتم التحقق من صلاحية الجلسة وتحميل كورسك التدريبي..." />;
   if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||submittingRef.current||pin.length!==4||!phone.trim())return;submittingRef.current=true;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.customToken)}catch{}}else if(result.member&&result.sessionToken){const normalized=normalizeMember(result.member)||(result.member as Member);setMember(normalized);setSessionToken(result.sessionToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.sessionToken)}catch{}}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{submittingRef.current=false;setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><div className="pin-input-wrap"><input id="member-pin" type={showPin ? "text" : "password"} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x6f0)).replace(/\D/g,'').slice(0,4))}/><button type="button" className="icon-btn pin-visibility-btn" aria-label={showPin ? "إخفاء الرمز" : "إظهار الرمز"} onClick={()=>setShowPin(v=>!v)}>{showPin ? <Eye size={17}/> : <EyeOff size={17}/>}</button></div><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
-  return <MemberPortal s={defaults} member={member} onSignOut={signOut}/>;
+  return <MemberPortal s={memberSettingsReady ? memberSettings : { ...memberSettings, showBarcodes: false }} member={member} onSignOut={signOut}/>;
 }
 type CategoryItem = {
   id: string;
@@ -202,6 +219,7 @@ type SettingsData = {
   showDate: boolean;
   accent: string;
   printFooterNote: string;
+  showBarcodes: boolean;
 };
 const muscles = [
   "تمارين الصدر",
@@ -421,6 +439,7 @@ const defaults: SettingsData = {
   showHeight: true,
   showWeight: true,
   showDate: true,
+  showBarcodes: true,
   accent: "#b7ff2a",
   printFooterNote: "نتمنى لكم تمريناً آمناً ونتائج مستمرة.",
 };
@@ -548,6 +567,7 @@ function normalizeSettings(value: unknown): SettingsData {
     printCoachPhotoUrl: printableImage(raw.printCoachPhotoUrl, coachPhoto),
     printHallPhotoUrl: printableImage(raw.printHallPhotoUrl, hallPhoto),
     printFooterNote: typeof raw.printFooterNote === "string" ? raw.printFooterNote.slice(0, 500) : defaults.printFooterNote,
+    showBarcodes: raw.showBarcodes !== false,
   };
 }
 function normalizeMembers(value: unknown): Member[] {
@@ -832,6 +852,7 @@ function CentralDataBridge({
   setMembers,
   setCourses,
   setCategories,
+  onRemoteSettingsReady,
 }: {
   role: AdminRecord["role"];
   settings: SettingsData;
@@ -844,6 +865,7 @@ function CentralDataBridge({
   setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
   setCourses: React.Dispatch<React.SetStateAction<ReadyCourse[]>>;
   setCategories: React.Dispatch<React.SetStateAction<CategoryItem[]>>;
+  onRemoteSettingsReady?: (ready: boolean) => void;
 }) {
   const [remotePresent, setRemotePresent] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
@@ -886,9 +908,10 @@ function CentralDataBridge({
           if (remote.categories) setCategories(normalizeCategories(remote.categories));
           setRemotePresent(true);
         }
+        onRemoteSettingsReady?.(true);
         setRemoteReady(true);
       }),
-    [setSettings, setExercises, setMembers, setCourses, setCategories],
+    [setSettings, setExercises, setMembers, setCourses, setCategories, onRemoteSettingsReady],
   );
   useEffect(() => {
     const save = async (requestedPayload: AppPayload = payload): Promise<boolean> => {
@@ -1177,6 +1200,7 @@ function App({
   admin: AdminProfile;
   onSignOut: () => void;
 }) {
+  const [settingsReady, setSettingsReady] = useState(!firebaseConfigured);
   const [settings, setSettings] = useState(() =>
     normalizeSettings(read("alasas-settings", defaults)),
   );
@@ -1293,6 +1317,7 @@ function App({
                 setMembers={setMembers}
                 setCourses={setCourses}
                 setCategories={setCategories}
+                onRemoteSettingsReady={setSettingsReady}
               />
               {page === "home" && (
                 <Dashboard
@@ -1321,6 +1346,7 @@ function App({
                   courses={courses}
                   muscleList={muscleNames}
                   initialQuery={globalSearch}
+                  showBarcodes={settingsReady && settings.showBarcodes}
                 />
               )}{" "}
               {page === "courses" && (
@@ -1329,6 +1355,7 @@ function App({
                   courses={courses}
                   setCourses={setCourses}
                   muscleList={muscleNames}
+                  showBarcodes={settingsReady && settings.showBarcodes}
                 />
               )}{" "}
               {page === "members" && (
@@ -1338,13 +1365,14 @@ function App({
                   courses={courses}
                   setMembers={setMembers}
                   settings={settings}
+                   settingsReady={settingsReady}
                   muscleList={muscleNames}
                   initialSearch={globalSearch}
                 />
               )}{" "}
               {page === "settings" && (
                 role === "SUPER_ADMIN" ? (
-                  <SettingsPage s={settings} setS={setSettings} />
+                  <SettingsPage s={settings} setS={setSettings} settingsReady={settingsReady} />
                 ) : (
                   <ManagerPrintSettings initial={settings} onSaved={setSettings} />
                 )
@@ -1985,12 +2013,14 @@ function Barcodes({
   courses = [],
   muscleList = muscles,
   initialQuery = "",
+  showBarcodes = true,
 }: {
   exercises: Exercise[];
   setExercises: React.Dispatch<React.SetStateAction<Exercise[]>>;
   courses?: ReadyCourse[];
   muscleList?: string[];
   initialQuery?: string;
+  showBarcodes?: boolean;
 }) {
   const [mode, setMode] = useState<"exercises" | "courses">("exercises");
   const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
@@ -2168,9 +2198,9 @@ function Barcodes({
               {selected.description && <p className="barcode-description">{selected.description}</p>}
               {selectedVideoEmbed && previewVideo && <div className="barcode-video-preview"><iframe title={`معاينة فيديو ${selected.name}`} src={selectedVideoEmbed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>}
               {selectedVideoId && <div className="barcode-video-actions"><button className="secondary-btn" type="button" onClick={() => setPreviewVideo((value) => !value)}><Play size={15}/>{previewVideo ? "إخفاء المعاينة" : "معاينة الفيديو"}</button><a className="text-btn" href={selectedVideo || "#"} target="_blank" rel="noreferrer"><ExternalLink size={14}/> فتح YouTube</a></div>}
-              <div className="qr-box">
-                <QRCodeSVG value={url} size={180} includeMargin level="M" />
-              </div>
+               {showBarcodes ? <div className="qr-box">
+                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
+               </div> : <p className="qr-disabled-note" role="status">عرض الباركودات متوقف من إعدادات النظام. ما زال رابط التمرين متاحاً.</p>}
               <code dir="ltr">{url}</code>
               <div className="modal-actions">
                 <Button
@@ -2187,19 +2217,19 @@ function Barcodes({
                 >
                   {copied ? "تم النسخ" : "نسخ رابط التمرين"}
                 </Button>
-                <Button
+                 {showBarcodes && <Button
                   secondary
                   onClick={download}
                   icon={<QrCode size={15} />}
                 >
                   تنزيل QR
-                </Button>
-                <Button
+                 </Button>}
+                 {showBarcodes && <Button
                   onClick={() => window.print()}
                   icon={<Printer size={16} />}
                 >
                   طباعة الرمز
-                </Button>
+                 </Button>}
               </div>
               <a
                 className="text-btn"
@@ -2217,18 +2247,18 @@ function Barcodes({
               </div>
               <h2>{selectedCourse.name}</h2>
               <p>{selectedCourse.days.length} أيام تدريب{selectedCourse.notes ? ` · ${selectedCourse.notes}` : ""}</p>
-              <div className="qr-box">
-                <QRCodeSVG value={url} size={180} includeMargin level="M" />
-              </div>
+               {showBarcodes ? <div className="qr-box">
+                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
+               </div> : <p className="qr-disabled-note" role="status">عرض الباركودات متوقف من إعدادات النظام. ما زال رابط الكورس متاحاً.</p>}
               <code dir="ltr">{url}</code>
               <div className="modal-actions">
                 <Button secondary onClick={copyExerciseUrl} icon={<Copy size={15} />}>{copied ? "تم النسخ" : "نسخ الرابط"}</Button>
-                <Button secondary onClick={download} icon={<QrCode size={15} />}>
+                 {showBarcodes && <Button secondary onClick={download} icon={<QrCode size={15} />}>
                   تنزيل QR الكورس
-                </Button>
-                <Button onClick={() => window.print()} icon={<Printer size={16} />}>
+                 </Button>}
+                 {showBarcodes && <Button onClick={() => window.print()} icon={<Printer size={16} />}>
                   طباعة رمز الكورس
-                </Button>
+                 </Button>}
               </div>
               <a className="text-btn" href={url} target="_blank" rel="noreferrer">
                 فتح صفحة الكورس <ExternalLink size={14} />
@@ -2263,11 +2293,13 @@ function Courses({
   courses,
   setCourses,
   muscleList = muscles,
+  showBarcodes = true,
 }: {
   exercises: Exercise[];
   courses: ReadyCourse[];
   setCourses: React.Dispatch<React.SetStateAction<ReadyCourse[]>>;
   muscleList?: string[];
+  showBarcodes?: boolean;
 }) {
   const [editing, setEditing] = useState<ReadyCourse | null>(null);
   const [show, setShow] = useState(false);
@@ -2310,10 +2342,10 @@ function Courses({
                   <p>{c.days.length} أيام تدريب{c.notes ? ` · ${c.notes}` : ""}</p>
                 </div>
                 <div className="row-actions">
-                  <button onClick={() => setQrCourse(c)}>
+                         {showBarcodes && <button onClick={() => setQrCourse(c)}>
                     <QrCode size={14} />
                     QR الكورس
-                  </button>
+                         </button>}
                   <button
                     onClick={() => {
                       setEditing(c);
@@ -2365,7 +2397,7 @@ function Courses({
                         <span>{n + 1}</span>
                         <b>{e.name}{e.notes ? ` (${e.notes})` : ""}</b>
                         <strong>
-                          {e.sets} × {e.reps}{e.weight ? ` · ${e.weight}` : ""}
+                           {e.sets} × {e.reps}
                         </strong>
                       </div>
                     ))
@@ -2384,7 +2416,7 @@ function Courses({
           text="أنشئ أول قالب منظم حسب الأيام والعضلات."
         />
       )}
-      {qrCourse && (
+      {qrCourse && showBarcodes && (
         <Modal title={`باركود الكورس — ${qrCourse.name}`} onClose={() => setQrCourse(null)}>
           <div className="qr-detail">
             <div className="qr-box">
@@ -2474,7 +2506,7 @@ function CourseWizard({
         i === day
           ? list.map((e) =>
               e.id === id
-                ? { ...e, [key]: key === "sets" ? Number(value) : value }
+                 ? { ...e, [key]: value }
                 : e,
             )
           : list,
@@ -2705,15 +2737,6 @@ function Picker({
                 />
               </label>
               <label>
-                الوزن
-                <input
-                  disabled={disabled}
-                  placeholder="مثال: 20 كغم"
-                  value={e.weight || ""}
-                  onChange={(x) => update(e.id, "weight", x.target.value)}
-                />
-              </label>
-              <label>
                 ملاحظات
                 <input
                   disabled={disabled}
@@ -2772,7 +2795,7 @@ function Review({
           {list.length ? (
             list.map((e) => (
               <span key={e.id}>
-                {e.name} · {e.sets} × {e.reps}{e.weight ? ` (${e.weight})` : ""}{e.notes ? ` — ${e.notes}` : ""}
+                 {e.name} · {e.sets} × {e.reps}{e.notes ? ` — ${e.notes}` : ""}
               </span>
             ))
           ) : (
@@ -2839,6 +2862,7 @@ function MembersWithPin({
   courses,
   setMembers,
   settings,
+  settingsReady,
   muscleList = muscles,
   initialSearch = "",
 }: {
@@ -2847,6 +2871,7 @@ function MembersWithPin({
   courses: ReadyCourse[];
   setMembers: React.Dispatch<React.SetStateAction<Member[]>>;
   settings: SettingsData;
+  settingsReady: boolean;
   muscleList?: string[];
   initialSearch?: string;
 }) {
@@ -2859,6 +2884,7 @@ function MembersWithPin({
   const [issueTarget, setIssueTarget] = useState<Member | null>(null);
   const [issuePhone, setIssuePhone] = useState('');
   const [issueCustomPin, setIssueCustomPin] = useState('');
+  const printSettings = settingsReady ? settings : { ...settings, showBarcodes: false };
   const [search, setSearch] = useState(initialSearch);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [revealedPin, setRevealedPin] = useState<{ memberId: string; pin: string } | null>(null);
@@ -3097,14 +3123,14 @@ function MembersWithPin({
             <button disabled={Boolean(deletingId)} onClick={() => { setEditing(m); setShow(true); }}><Pencil size={14} />تعديل</button>
             <button disabled={pinBusy || Boolean(deletingId)} onClick={() => openIssue(m)}><Check size={14} />إدارة PIN</button>
             <button disabled={Boolean(deletingId)} onClick={() => setPreviewMember(m)}><FileText size={14} />معاينة الطباعة</button>
-            <button disabled={Boolean(deletingId)} onClick={() => printMember(m, settings)}><Printer size={14} />طباعة</button>
+             <button disabled={Boolean(deletingId)} onClick={() => printMember(m, printSettings)}><Printer size={14} />طباعة</button>
             <button disabled={Boolean(deletingId)} aria-busy={deletingId === m.id} onClick={() => remove(m)}><Trash2 size={14} />{deletingId === m.id ? 'جارٍ الحذف…' : 'حذف'}</button>
           </div>
         </td>
       </tr>;
     })}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="لا يوجد مشتركون مطابقون" text="أضف مشتركاً جديداً أو غيّر معايير البحث والتصفية." />}
     {(show || editing) && <MemberWizard initial={editing} exercises={exercises} courses={courses} muscleList={muscleList} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
-    {previewMember && <PrintPreviewModal member={previewMember} settings={settings} onClose={() => setPreviewMember(null)} />}
+    {previewMember && <PrintPreviewModal member={previewMember} settings={printSettings} onClose={() => setPreviewMember(null)} />}
   </>;
 }
 
@@ -3536,8 +3562,8 @@ function MemberPortal({
                     <div className="exercise-card-header"><button aria-label={`تحديد إنجاز ${e.name}`} className={done.includes(e.id) ? "exercise-check checked" : "exercise-check"} onClick={() => setDone((x) => x.includes(e.id) ? x.filter((i) => i !== e.id) : [...x, e.id])}>{done.includes(e.id) && <Check size={16} />}</button><div><span className="exercise-number">تمرين {idx + 1}</span><h3>{e.name}</h3><p>{e.muscle}</p></div></div>
                     {e.image && <img className="member-exercise-image" src={e.image} alt={`صورة توضيحية لـ ${e.name}`} loading="lazy" />}
                     {(e.description || e.notes) && <p className="member-exercise-note">{e.notes && <b>ملاحظة: </b>}{e.notes || e.description}</p>}
-                    <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /><Metric label="الوزن" value={e.weight || "—"} /><Metric label="الراحة" value={e.rest || "—"} /></div>
-                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {videoId ? "مشاهدة شرح التمرين" : "فتح بطاقة التمرين"}</a><a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a></div>
+                    <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /><Metric label="الراحة" value={e.rest || "—"} /></div>
+                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {videoId ? "مشاهدة شرح التمرين" : "فتح بطاقة التمرين"}</a>{s.showBarcodes && <a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a>}</div>
                   </article>;
                 }) : <Empty icon={<Dumbbell size={28} />} title="لا توجد تمارين لهذا اليوم" text="يمكنك اختيار يوم آخر من الخطة." />}
               </div>
@@ -3730,7 +3756,7 @@ function PublicCourseDetail({
                         </a>
                         {e.notes ? ` (${e.notes})` : ""}
                       </b>
-                      <strong>{e.sets} × {e.reps}{e.weight ? ` · ${e.weight}` : ""}</strong>
+                      <strong>{e.sets} × {e.reps}</strong>
                     </div>
                   ))
                 ) : (
@@ -3832,9 +3858,11 @@ function ManagerPrintSettings({initial,onSaved}: {initial: SettingsData; onSaved
 function SettingsPage({
   s,
   setS,
+  settingsReady,
 }: {
   s: SettingsData;
   setS: React.Dispatch<React.SetStateAction<SettingsData>>;
+  settingsReady: boolean;
 }) {
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -3862,7 +3890,7 @@ function SettingsPage({
     setS((x) => ({ ...x, [key]: value }));
   };
   const save = () => {
-    if (saveState === "saving" || !firebaseConfigured) return;
+    if (saveState === "saving" || !firebaseConfigured || !settingsReady) return;
     const images = [s.logo, s.printCoachPhotoUrl, s.printHallPhotoUrl];
     if (images.some((value) => value && !safeImageUrl(value) && !value.startsWith("/"))) {
       setSaveState("error");
@@ -3930,6 +3958,24 @@ function SettingsPage({
           <ImageSetting label="صورة خلفية القاعة للطباعة" value={s.printHallPhotoUrl} setting="hall" onChange={(value) => update("printHallPhotoUrl", value)} persist={async value => { const next={...s,printHallPhotoUrl:value}; await saveManagerPrintSettings(next); setS(next); }} />
         </div>
         <label className="print-footer-note">النص الختامي للمشترك<textarea maxLength={500} value={s.printFooterNote} onChange={(e) => update("printFooterNote", e.target.value)} placeholder="تعليمات الكابتن أو رسالة ختامية" /></label>
+      </section>
+      <section className="settings-block barcode-settings-block" aria-labelledby="barcode-settings-title">
+        <h2 id="barcode-settings-title">الباركودات (QR Codes)</h2>
+        <p>التحكم بإظهار أو إخفاء رموز QR الخاصة بالمشتركين والتمارين في الواجهات والطباعة.</p>
+        <label className="settings-toggle">
+          <span>
+            <strong>إظهار الباركودات</strong>
+            <small>{settingsReady ? (s.showBarcodes ? "الحالة الحالية: مفعّل" : "الحالة الحالية: متوقف") : "جارٍ قراءة الحالة المحفوظة…"}</small>
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="إظهار الباركودات"
+            checked={settingsReady && s.showBarcodes}
+            disabled={!settingsReady}
+            onChange={(e) => update("showBarcodes", e.target.checked)}
+          />
+        </label>
       </section>
       <section className="settings-block">
         <h2>قالب الطباعة</h2>
@@ -4071,9 +4117,13 @@ function Modal({
   );
 }
 function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
-  const qrMarkup = (e: MemberExercise) => `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div>`;
-  const courseQrMarkup = `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={memberLoginUrl()} size={76} includeMargin level="M" />)}<strong>امسح الرمز للدخول إلى حسابك وعرض جدول تمارينك</strong></div>`;
-  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="exercise-name"><strong>${n + 1}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets))}</td><td>${escapeHtml(e.reps)}</td><td>${escapeHtml(e.weight || "—")}</td><td>${escapeHtml(e.rest || "—")}</td><td>${qrMarkup(e)}</td></tr>`).join("");
+  const qrMarkup = (e: MemberExercise) => s.showBarcodes
+    ? `<td class="qr-cell"><div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div></td>`
+    : "";
+  const courseQrMarkup = s.showBarcodes
+    ? `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={memberLoginUrl()} size={76} includeMargin level="M" />)}<strong>امسح الرمز للدخول إلى حسابك وعرض جدول تمارينك</strong></div>`
+    : "";
+  const rows = (day: DayPlan) => day.map((e, n) => `<tr><td class="exercise-name"><strong>${n + 1}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td><td>${escapeHtml(e.rest || "—")}</td>${qrMarkup(e)}</tr>`).join("");
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
   const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
@@ -4085,11 +4135,11 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
     s.instagram ? `<span class="social"><span class="social-icon">${renderToStaticMarkup(<InstagramMark />)}</span>${escapeHtml(s.instagram)}</span>` : "",
   ].join("");
   return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:38%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:12%}.day th:nth-child(3),.day td:nth-child(3){width:15%}.day th:nth-child(4),.day td:nth-child(4){width:13%}.day th:nth-child(5),.day td:nth-child(5){width:12%}.day th:nth-child(6),.day td:nth-child(6){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.footer .social{display:inline-flex;align-items:center;gap:1.5mm}.footer .social-icon{display:inline-grid;place-items:center}.footer .social svg{width:4mm;height:4mm}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:46%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:15%}.day th:nth-child(3),.day td:nth-child(3){width:18%}.day th:nth-child(4),.day td:nth-child(4){width:15%}.day th:nth-child(5),.day td:nth-child(5){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.footer .social{display:inline-flex;align-items:center;gap:1.5mm}.footer .social-icon{display:inline-grid;place-items:center}.footer .social svg{width:4mm;height:4mm}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
   </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
     const dayMuscles = [...new Set(day.map((e) => e.muscle))].filter(Boolean).join(" + ");
-    return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th><th>الوزن</th><th>الراحة</th><th>QR</th></tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
-  }).join("")}<div class="login-qr">${courseQrMarkup}</div><footer class="footer">${socialFooter}${s.address ? `<span>${escapeHtml(s.address)}</span>` : ""}${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=r;i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
+     return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th><th>الراحة</th>${s.showBarcodes ? "<th>QR</th>" : ""}</tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
+  }).join("")}${s.showBarcodes ? `<div class="login-qr">${courseQrMarkup}</div>` : ""}<footer class="footer">${socialFooter}${s.address ? `<span>${escapeHtml(s.address)}</span>` : ""}${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=r;i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
 }
 function PrintPreviewModal({
   member,

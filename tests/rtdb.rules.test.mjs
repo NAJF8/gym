@@ -150,6 +150,23 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   assert.equal(snapshot.val().name, 'emulator-sync-ok')
 })
 
+test('barcode visibility is a boolean setting writable only by SUPER_ADMIN and publicly readable', async () => {
+  const superAdmin = verifiedContext('super').database()
+  const manager = verifiedContext('manager').database()
+  const publicDb = env.unauthenticatedContext().database()
+
+  await assertSucceeds(set(ref(superAdmin, 'appData/settings/showBarcodes'), false))
+  await assertSucceeds(set(ref(superAdmin, 'publicSettings/showBarcodes'), false))
+  const hidden = await assertSucceeds(get(ref(publicDb, 'publicSettings/showBarcodes')))
+  assert.equal(hidden.val(), false)
+
+  await assertFails(set(ref(manager, 'appData/settings/showBarcodes'), true))
+  await assertFails(set(ref(manager, 'publicSettings/showBarcodes'), true))
+  await assertFails(set(ref(superAdmin, 'appData/settings/showBarcodes'), 'false'))
+  await assertFails(set(ref(superAdmin, 'publicSettings/showBarcodes'), 'false'))
+  await assertSucceeds(set(ref(superAdmin, 'appData/settings/showBarcodes'), true))
+})
+
 test('MANAGER can write only scoped print identity fields', async () => {
   const manager = verifiedContext('manager').database()
   const allowed = {

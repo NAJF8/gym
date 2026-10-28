@@ -5,7 +5,7 @@ import { safeVideoUrl } from './videoUrl'
 type M={id:number;name:string;weight:number;height:number;plan:string}
 type E={id:number;name:string;muscle:string;sets:number;reps:string;weight:string;video:string}
 type C={id:number;name:string;days:{title:string;muscle:string;exercises:number[]}[]}
-export default function CoursePrint({course,members,exercises}:{course:C;members:M[];exercises:E[]}){
+export default function CoursePrint({course,members,exercises,showBarcodes=true}:{course:C;members:M[];exercises:E[];showBarcodes?:boolean}){
  const [memberId,setMemberId]=useState(members[0]?.id||0)
  const [coach,setCoach]=useState('اسم الكابتن')
  const [gym,setGym]=useState('اسم القاعة')
@@ -14,7 +14,6 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
  const [address,setAddress]=useState('')
  const [notes,setNotes]=useState('')
  const [date,setDate]=useState(new Date().toISOString().slice(0,10))
- const [qr,setQr]=useState(false)
  const member=members.find(m=>m.id===memberId)
  const coachPhoto=`${import.meta.env.BASE_URL}assets/coach.webp`
  const hallPhoto=`${import.meta.env.BASE_URL}assets/hall.svg`
@@ -32,7 +31,6 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
     <label>العنوان<input value={address} onChange={e=>setAddress(e.target.value)}/></label>
     <p className="print-static-assets">صور الكابتن والقاعة ثابتة من Firebase Hosting: {coachPhoto} و {hallPhoto}</p>
     <label className="print-notes">ملاحظات الكابتن<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="مثلاً: 15 دقيقة مشي بعد التمرين"/></label>
-    <label className="print-checkbox"><input type="checkbox" checked={qr} onChange={e=>setQr(e.target.checked)}/> أضف QR لروابط الشرح (قد يزيد عدد صفحات الطباعة)</label>
    </div>
   </div>
   <div className="print-sheet" dir="rtl" style={{backgroundImage:`linear-gradient(rgba(255,255,255,.94),rgba(255,255,255,.94)),url(${hallPhoto})`}}>
@@ -45,7 +43,7 @@ export default function CoursePrint({course,members,exercises}:{course:C;members
    <h2 className="sheet-title">{course.name}</h2>
    {course.days.map((d,i)=><section className="sheet-day" key={i}>
     <h3>{d.title} <small>{d.muscle}</small></h3>
-   <ol>{d.exercises.map((id,j)=>{const ex=exercises.find(e=>e.id===id);const video=ex&&safeVideoUrl(ex.video);return ex?<li key={j}><span className="sheet-exercise">{ex.name}</span><span className="sheet-prescription">{ex.sets} × {ex.reps}{ex.weight&&ex.weight!=='0'?' — '+ex.weight+' كغم':''}</span>{qr&&video&&<QRCodeSVG value={video} size={38}/>}</li>:null})}</ol>
+   <ol>{d.exercises.map((id,j)=>{const ex=exercises.find(e=>e.id===id);const video=ex&&safeVideoUrl(ex.video);return ex?<li key={j}><span className="sheet-exercise">{ex.name}</span><span className="sheet-prescription">{ex.sets} × {ex.reps}</span>{showBarcodes&&video&&<QRCodeSVG value={video} size={38}/>}</li>:null})}</ol>
     {!d.exercises.length&&<p className="sheet-empty">لم تتم إضافة تمارين لهذا اليوم.</p>}
    </section>)}
    {notes&&<div className="sheet-notes"><b>ملاحظات الكابتن</b><p>{notes}</p></div>}

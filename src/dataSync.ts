@@ -325,6 +325,14 @@ export async function writeAdminData<T>(
       if (appData[key] !== undefined && !same(appData[key], previous?.[key]))
         updates[`appData/${key}`] = stripUndefined(appData[key]);
     }
+    const nextSettings = appData.settings && typeof appData.settings === "object"
+      ? appData.settings as Record<string, unknown>
+      : null;
+    const previousSettings = previous?.settings && typeof previous.settings === "object"
+      ? previous.settings as Record<string, unknown>
+      : null;
+    if (typeof nextSettings?.showBarcodes === "boolean" && nextSettings.showBarcodes !== previousSettings?.showBarcodes)
+      updates["publicSettings/showBarcodes"] = nextSettings.showBarcodes;
     if (appData.migratedAt !== undefined)
       updates["appData/migratedAt"] = appData.migratedAt;
   }
@@ -507,6 +515,27 @@ export function watchPublicCourse<T>(
     ref(firebaseDatabase, `publicCourses/${courseId}`),
     (snapshot) => {
       callback(snapshot.exists() ? (snapshot.val() as T) : null);
+    },
+  );
+}
+
+/** Public, read-only projection used by the member portal for display flags. */
+export function watchPublicSettings<T>(
+  callback: (value: T | null) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe | (() => undefined) {
+  if (!firebaseDatabase) {
+    callback(null);
+    return () => undefined;
+  }
+  return onValue(
+    ref(firebaseDatabase, "publicSettings"),
+    (snapshot) => {
+      callback(snapshot.exists() ? (snapshot.val() as T) : null);
+    },
+    (error) => {
+      if (onError) onError(error as Error);
+      else callback(null);
     },
   );
 }
