@@ -27,7 +27,10 @@ export async function signInAdmin() {
   try {
     return await signInWithPopup(firebaseAuth, googleProvider)
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-blocked') {
+    // Some browsers close the OAuth popup before the Google flow completes.
+    // Retry once using a full-page redirect instead of showing a raw Firebase error.
+    if (error && typeof error === 'object' && 'code' in error &&
+      (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user')) {
       return signInWithRedirect(firebaseAuth, googleProvider)
     }
     throw error
