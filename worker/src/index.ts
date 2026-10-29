@@ -1,5 +1,5 @@
 import { base64ToBytes, constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto.ts";
-import { applyInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail } from "./invitations.ts";
+import { applyInvitation, cancelInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail, validInvitationRole } from "./invitations.ts";
 
 interface Env {
   PIN_DB: D1Database;
@@ -363,8 +363,8 @@ async function adminManagement(env: Env, request: Request, action: string) {
   if (action === 'list') {
     const admins = idToken ? await firebaseGetWithIdToken(env, 'admins', idToken) as Record<string, Record<string, unknown>> | null : null;
     const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt, updatedAt: value.updatedAt, updatedBy: value.updatedBy })).filter(row => row.role === 'COACH' || row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
-    const invites = await env.PIN_DB.prepare("SELECT email, display_name AS displayName, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
-    for (const invite of invites.results || []) rows.push({ email: String(invite.email || ''), displayName: String(invite.displayName || ''), role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
+    const invites = await env.PIN_DB.prepare("SELECT invitation_id AS invitationId, email, display_name AS displayName, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
+    for (const invite of invites.results || []) rows.push({ invitationId: invite.invitationId, email: String(invite.email || ''), displayName: String(invite.displayName || ''), role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
     return json({ admins: rows }, 200, cors(env, request.headers.get('origin') || ''));
   }
   if (action === 'invite') {
@@ -379,6 +379,15 @@ async function adminManagement(env: Env, request: Request, action: string) {
     const invitationId = crypto.randomUUID(); const now = Date.now();
     await createInvitation(env.PIN_DB, { invitationId, email, displayName, role, actorUid, now, expiresAt: now + 7 * 24 * 60 * 60 * 1000 });
     return json({ invitationId }, 200, cors(env, request.headers.get('origin') || ''));
+  }
+  if (action === 'cancel') {
+    const body = await request.json() as { invitationId?: unknown; email?: unknown; role?: unknown };
+    const invitationId = typeof body.invitationId === 'string' ? body.invitationId.trim() : '';
+    const email = normalizeInvitationEmail(body.email);
+    const role = validInvitationRole(body.role) ? body.role : null;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invitationId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !role) throw new Error('INVITATION_CANCEL_INVALID');
+    const result = await cancelInvitation(env.PIN_DB, { invitationId, email, role, actorUid, now: Date.now() });
+    return json({ ok: true, invitationId, email, role, ...result }, 200, cors(env, request.headers.get('origin') || ''));
   }
   const body = await request.json() as { uid?: unknown; action?: unknown; role?: unknown; active?: unknown; displayName?: unknown };
   if (typeof body.uid !== 'string' || !['role', 'active', 'remove', 'displayName'].includes(String(body.action))) throw new Error('ADMIN_UPDATE_INVALID');

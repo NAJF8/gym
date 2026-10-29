@@ -14,7 +14,7 @@ export type InvitationRow = {
   applied_at: number | null;
 };
 
-type Statement = { bind: (...values: unknown[]) => Statement };
+type Statement = { bind: (...values: unknown[]) => Statement; first: <T = unknown>() => Promise<T | null> };
 type Db = { prepare: (sql: string) => Statement; batch: (statements: Statement[]) => Promise<Array<{ meta?: { changes?: number }; results?: unknown[] }>> };
 
 export function normalizeInvitationEmail(value: unknown) {
@@ -31,6 +31,24 @@ export async function createInvitation(db: Db, input: { invitationId: string; em
     db.prepare("INSERT INTO admin_invitations (invitation_id, email, display_name, role, status, expires_at, created_at, created_by_uid, claimed_uid, claimed_at, applied_uid, applied_at, updated_at) VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, NULL, NULL, NULL, NULL, ?)").bind(input.invitationId, input.email, input.displayName, input.role, input.expiresAt, input.now, input.actorUid, input.now),
     db.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) VALUES (?, 'INVITE_CREATED', ?, ?, NULL, ?, ?, ?, ?)").bind(crypto.randomUUID(), input.invitationId, input.actorUid, input.email, input.role, JSON.stringify({ displayName: input.displayName }), input.now),
   ]);
+}
+
+export async function cancelInvitation(db: Db, input: { invitationId: string; email: string; role: InvitationRole; actorUid: string; now: number }) {
+  const row = await db.prepare("SELECT * FROM admin_invitations WHERE invitation_id = ?").bind(input.invitationId).first<InvitationRow>();
+  if (!row) throw new Error("INVITATION_NOT_FOUND");
+  if (normalizeInvitationEmail(row.email) !== input.email || row.role !== input.role) throw new Error("INVITATION_TARGET_MISMATCH");
+  if (row.status === "REVOKED") return { status: "REVOKED" as const, idempotent: true };
+  if (row.status !== "PENDING") throw new Error("INVITATION_NOT_PENDING");
+
+  const result = await db.batch([
+    db.prepare("UPDATE admin_invitations SET status = 'REVOKED', updated_at = ? WHERE invitation_id = ? AND email = ? AND role = ? AND status = 'PENDING'").bind(input.now, input.invitationId, input.email, input.role),
+    db.prepare("INSERT INTO admin_audit_logs (audit_id, action, invitation_id, actor_uid, target_uid, email, role, details, created_at) SELECT ?, 'INVITE_CANCELLED', ?, ?, NULL, ?, ?, ?, ? WHERE changes() = 1").bind(crypto.randomUUID(), input.invitationId, input.actorUid, input.email, input.role, JSON.stringify({ previousStatus: "PENDING", reason: "admin_cancelled" }), input.now),
+  ]);
+  if ((result[0]?.meta?.changes || 0) === 1) return { status: "REVOKED" as const, idempotent: false };
+
+  const latest = await db.prepare("SELECT status, email, role FROM admin_invitations WHERE invitation_id = ?").bind(input.invitationId).first<{ status?: string; email?: string; role?: string }>();
+  if (latest?.status === "REVOKED" && normalizeInvitationEmail(latest.email) === input.email && latest.role === input.role) return { status: "REVOKED" as const, idempotent: true };
+  throw new Error("INVITATION_NOT_PENDING");
 }
 
 export async function claimLatestInvitation(db: Db, email: string, uid: string, now: number) {
