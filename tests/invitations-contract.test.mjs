@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const migration = await readFile(new URL("../worker/migrations/0003_admin_invitations.sql", import.meta.url), "utf8");
+const productionMigration = await readFile(new URL("../worker/migrations-production/0000_fit_1_8_0_production_schema.sql", import.meta.url), "utf8");
 const helper = await readFile(new URL("../worker/src/invitations.ts", import.meta.url), "utf8");
 const worker = await readFile(new URL("../worker/src/index.ts", import.meta.url), "utf8");
 
@@ -11,6 +12,13 @@ test("invitation storage has a single-use state machine and audit table", () => 
   assert.match(migration, /admin_audit_logs/);
   assert.match(helper, /status = 'CLAIMED'.*status = 'PENDING'/s);
   assert.match(helper, /status = 'APPLIED'.*claimed_uid/s);
+});
+
+test("production invitation migration preserves rows and supports invitation role values", () => {
+  assert.match(productionMigration, /CREATE TABLE IF NOT EXISTS admin_invitations/);
+  assert.match(productionMigration, /role TEXT NOT NULL CHECK \(role IN \('COACH', 'MANAGER'\)\)/);
+  assert.match(productionMigration, /admin_invitations_live_email_idx/);
+  assert.match(productionMigration, /admin_audit_logs/);
 });
 
 test("Worker acceptance uses verified identity and keyed member storage", () => {

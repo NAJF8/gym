@@ -1,0 +1,15 @@
+name = "alasas-fit-member-auth"
+main = "src/index.ts"
+compatibility_date = "2026-10-16"
+
+[vars]
+FIREBASE_DATABASE_URL = "https://gym1-4f1bb-default-rtdb.firebaseio.com"
+CORS_ORIGINS = "https://fit.alasas.tech,https://gym1-4f1bb.web.app,https://gym1-4f1bb.firebaseapp.com"
+AUTH_DIAGNOSTICS = "false"
+IMAGE_BASE_URL = "https://fit.alasas.tech"
+
+[[d1_databases]]
+binding = "PIN_DB"
+database_name = "alasas-fit-member-auth"
+database_id = "9f7c715b-87ee-4c47-8e2b-45b17ff6d64b"
+migrations_dir = "migrations-production"

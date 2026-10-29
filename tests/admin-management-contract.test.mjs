@@ -29,6 +29,8 @@ test("management routes keep CORS and server-side Google-admin checks explicit",
   assert.match(worker, /user\.emailVerified !== true/);
   assert.match(worker, /providerId === "google\.com"/);
   assert.match(worker, /actor\?\.role !== ['"]SUPER_ADMIN['"]/);
+  assert.match(worker, /function ensureDatabaseBinding/);
+  assert.match(worker, /if \(!env\.PIN_DB && env\.DB\) env\.PIN_DB = env\.DB/);
 });
 
 test("invitation cancellation is exact-match, pending-only, audited, and idempotent", () => {

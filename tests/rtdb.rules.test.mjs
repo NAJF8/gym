@@ -34,6 +34,7 @@ before(async () => {
         super: { role: 'SUPER_ADMIN', active: true, email: 'super@example.test' },
         super2: { role: 'SUPER_ADMIN', active: true, email: 'super2@example.test' },
         manager: { role: 'MANAGER', active: true, email: 'manager@example.test' },
+        coach: { role: 'COACH', active: true, email: 'coach@example.test' },
         inactive: { role: 'MANAGER', active: false, email: 'inactive@example.test' },
       },
       appData: { schemaVersion: 1, membersById: { memberA: { id: 'memberA', name: 'A', version: 1 } }, deletedMemberIds: {} },
@@ -108,6 +109,14 @@ test('manager can use appData but cannot modify admin roles', async () => {
   await assertFails(set(ref(db, 'admins/another'), { role: 'SUPER_ADMIN', active: true }))
   await assertFails(set(ref(db, 'admins/manager'), { role: 'SUPER_ADMIN', active: true }))
   await assertFails(set(ref(db, 'admins/new-manager'), { role: 'MANAGER', active: true, email: 'new@example.test' }))
+})
+
+test('active COACH can use member records but cannot change settings or admin roles', async () => {
+  const db = verifiedContext('coach').database()
+  await assertSucceeds(get(ref(db, 'appData')))
+  await assertSucceeds(set(ref(db, 'appData/membersById/coach-member'), { id: 'coach-member', name: 'Coach member', version: 1 }))
+  await assertFails(set(ref(db, 'appData/settings/gymName'), 'coach-must-not-change-this'))
+  await assertFails(set(ref(db, 'admins/another-coach'), { role: 'COACH', active: true, email: 'another-coach@example.test' }))
 })
 
 test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {
