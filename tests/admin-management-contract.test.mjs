@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 const managementClient = await readFile(new URL("../src/adminManagement.ts", import.meta.url), "utf8");
 const ui = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
 const worker = await readFile(new URL("../worker/src/index.ts", import.meta.url), "utf8");
+const invitations = await readFile(new URL("../worker/src/invitations.ts", import.meta.url), "utf8");
 
 test("admin management client requires an explicit environment endpoint", () => {
   assert.match(managementClient, /VITE_PIN_SERVICE_ENDPOINT/);
@@ -28,4 +29,15 @@ test("management routes keep CORS and server-side Google-admin checks explicit",
   assert.match(worker, /user\.emailVerified !== true/);
   assert.match(worker, /providerId === "google\.com"/);
   assert.match(worker, /actor\?\.role !== ['"]SUPER_ADMIN['"]/);
+});
+
+test("invitation cancellation is exact-match, pending-only, audited, and idempotent", () => {
+  assert.match(worker, /action === ['"]cancel['"]/);
+  assert.match(worker, /validInvitationRole\(body\.role\)/);
+  assert.match(worker, /cancelInvitation\(env\.PIN_DB/);
+  assert.match(worker, /INVITATION_CANCEL_INVALID/);
+  assert.match(worker, /invitation_id AS invitationId/);
+  assert.match(invitations, /status = 'PENDING'/);
+  assert.match(invitations, /INVITE_CANCELLED/);
+  assert.match(invitations, /idempotent: true/);
 });
