@@ -41,6 +41,10 @@ before(async () => {
       publicExercises: {
         'bench-press': { id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://www.youtube.com/watch?v=old' },
       },
+      publicCourses: {
+        'course-1': { id: 'course-1', name: 'دورة اختبار', notes: '', days: [], dayNotes: {} },
+        'member-memberA': { id: 'member-memberA', name: 'بيانات خاصة' },
+      },
       membersByUid: {
         memberA: { active: true, name: 'A' },
         memberB: { active: true, name: 'B' },
@@ -79,6 +83,20 @@ test('public exercise video validation rejects unsafe, encoded, spaced, and unap
   ]) await assertFails(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: '' }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: 'https://www.youtube.com/watch?v=safe' }))
+})
+
+test('public course reads are limited to safe public IDs and bounded fields', async () => {
+  const anonymous = env.unauthenticatedContext().database()
+  const manager = verifiedContext('manager').database()
+  await assertFails(get(ref(anonymous, 'publicCourses')))
+  await assertSucceeds(get(ref(anonymous, 'publicCourses/course-1')))
+  await assertFails(get(ref(anonymous, 'publicCourses/member-memberA')))
+  await assertFails(set(ref(manager, 'publicCourses/course-unsafe'), {
+    id: 'course-unsafe', name: 'اختبار', authUid: 'should-not-be-stored',
+  }))
+  await assertSucceeds(set(ref(manager, 'publicCourses/course-safe'), {
+    id: 'course-safe', name: 'دورة آمنة', notes: '', days: [], dayNotes: {},
+  }))
 })
 
 test('authorized multi-location exercise write is readable back by id', async () => {

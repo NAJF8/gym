@@ -82,7 +82,10 @@ export function stripUndefined<T>(value: T): T {
 
 export function backupLocalSnapshot<T>(payload: T) {
   const key = `alasas-local-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  localStorage.setItem(key, JSON.stringify(payload));
+  // Migration backups are session-scoped and intentionally contain only the
+  // redacted payload assembled by the caller. Do not leave member data in a
+  // persistent browser store.
+  sessionStorage.setItem(key, JSON.stringify(payload));
   return key;
 }
 

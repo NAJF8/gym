@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin } from "../worker/src/crypto.ts";
+import { constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, PIN_HASH_ALGORITHM, randomPin } from "../worker/src/crypto.ts";
 
 test("PIN generation is exactly four decimal digits", () => {
   for (let index = 0; index < 100; index += 1) assert.match(randomPin(), /^\d{4}$/);
@@ -13,6 +13,17 @@ test("PIN derivation verifies without storing the raw PIN", async () => {
   const expected = Uint8Array.from(atob(credential.hash), char => char.charCodeAt(0));
   assert.equal(constantTimeEqual(derived, expected), true);
   assert.equal(constantTimeEqual(await derivePin("0428", Uint8Array.from(atob(credential.salt), char => char.charCodeAt(0))), expected), false);
+});
+
+test("new PIN credentials are bound to a worker-held secret and versioned", async () => {
+  const secret = "staging-pin-secret";
+  const credential = await hashPin("0427", secret);
+  const salt = Uint8Array.from(atob(credential.salt), char => char.charCodeAt(0));
+  const expected = Uint8Array.from(atob(credential.hash), char => char.charCodeAt(0));
+  assert.equal(PIN_HASH_ALGORITHM, "PBKDF2-SHA256-HMAC");
+  assert.equal(constantTimeEqual(await derivePin("0427", salt, secret), expected), true);
+  assert.equal(constantTimeEqual(await derivePin("0427", salt, "wrong-secret"), expected), false);
+  assert.equal(constantTimeEqual(await derivePin("0427", salt), expected), false);
 });
 
 test("PIN AES-GCM encryption and decryption binds memberId as AAD", async () => {

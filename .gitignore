@@ -4,3 +4,6 @@ dist/
 .env.*
 !.env.example
 *-debug.log
+output/playwright/
+output/playwright-staging-auth.json
+.playwright/
