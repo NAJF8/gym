@@ -3,6 +3,8 @@ import { applyInvitation, cancelInvitation, claimLatestInvitation, createInvitat
 
 interface Env {
   PIN_DB: D1Database;
+  /** Backward-compatible alias for deployments that still expose the D1 binding as DB. */
+  DB?: D1Database;
   FIREBASE_DATABASE_URL: string;
   FIREBASE_WEB_API_KEY: string;
   PIN_PEPPER?: string;
@@ -18,13 +20,20 @@ interface Env {
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
   AUTH_DIAGNOSTICS?: string;
+  IMAGE_BASE_URL?: string;
+  /** Deprecated Staging name kept only as a compatibility fallback. */
+  STAGING_IMAGE_BASE_URL?: string;
   GITHUB_APP_ID?: string;
   GITHUB_INSTALLATION_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_OWNER?: string;
   GITHUB_REPO?: string;
   GITHUB_BRANCH?: string;
-  STAGING_IMAGE_BASE_URL?: string;
+}
+
+function ensureDatabaseBinding(env: Env) {
+  if (!env.PIN_DB && env.DB) env.PIN_DB = env.DB;
+  if (!env.PIN_DB) throw new Error("PIN_DB_NOT_CONFIGURED");
 }
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -172,7 +181,7 @@ async function githubInstallationToken(env: Env) {
   const jwt = `${header}.${claims}.${encodeBase64Url(signature)}`;
   const response = await fetch(`https://api.github.com/app/installations/${config.installationId}/access_tokens`, {
     method: "POST",
-    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" },
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28" },
   });
   if (!response.ok) throw new Error("GITHUB_AUTH_FAILED");
   const body = await response.json() as { token?: string };
@@ -184,7 +193,7 @@ async function githubRequest(env: Env, path: string, init: RequestInit = {}) {
   const { token, config } = await githubInstallationToken(env);
   const response = await fetch(`https://api.github.com${path}`, {
     ...init,
-    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28", ...(init.headers || {}) },
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28", ...(init.headers || {}) },
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -241,7 +250,7 @@ async function uploadPrintImage(env: Env, request: Request) {
   const upload = await githubRequest(env, `/repos/${config.owner}/${config.repo}/contents/${encodedPath}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ message: `chore(staging): upload ${imageSlots[slot].prefix}`, content, branch: config.branch }),
+    body: JSON.stringify({ message: `chore: upload ${imageSlots[slot].prefix}`, content, branch: config.branch }),
   });
   const commit = typeof upload.body.commit === "object" && upload.body.commit ? upload.body.commit as { sha?: unknown } : {};
   const commitSha = typeof commit.sha === "string" ? commit.sha : "";
@@ -260,14 +269,15 @@ async function imageDeploymentStatus(env: Env, request: Request) {
   const path = typeof body.path === "string" && /^public\/uploads\/print\/[A-Za-z0-9_.-]+\.(png|jpg|webp)$/.test(body.path) ? body.path : "";
   if (!commitSha || !path) throw new Error("IMAGE_STATUS_INVALID");
   const { token, config } = await githubInstallationToken(env);
-  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=20`, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" } });
+  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=20`, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28" } });
   if (!response.ok) throw new Error("GITHUB_API_FAILED");
   const runs = await response.json() as { workflow_runs?: Array<{ status?: string; conclusion?: string }> };
   const run = runs.workflow_runs?.[0];
   if (!run) return json({ state: "queued" }, 200, cors(env, request.headers.get("origin") || ""));
   if (run.status !== "completed") return json({ state: "running" }, 200, cors(env, request.headers.get("origin") || ""));
   if (run.conclusion !== "success") return json({ state: "failed" }, 200, cors(env, request.headers.get("origin") || ""));
-  const base = (env.STAGING_IMAGE_BASE_URL || "https://alasas-fit-staging.web.app").replace(/\/$/, "");
+  const base = (env.IMAGE_BASE_URL || env.STAGING_IMAGE_BASE_URL || "").replace(/\/$/, "");
+  if (!base) throw new Error("IMAGE_BASE_URL_NOT_CONFIGURED");
   return json({ state: "deployed", deployedUrl: `${base}/${path.slice("public/".length)}` }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
@@ -709,6 +719,7 @@ export default {
     if (origin && !allowedOrigins(env).includes(origin)) return json({ error: "CORS_ORIGIN_DENIED" }, 403, headers);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     try {
+      ensureDatabaseBinding(env);
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/image-upload") return await uploadPrintImage(env, request);

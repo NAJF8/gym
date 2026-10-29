@@ -18,7 +18,7 @@
     "test:video": "node --experimental-strip-types --test tests/video-url.test.mjs",
     "test:pin": "node --experimental-strip-types --test tests/pin-crypto.test.mjs tests/pin-lockout-concurrent.test.mjs tests/image-url.test.mjs tests/pin-card-contract.test.mjs tests/pin-idempotency-contract.test.mjs tests/pin-enumeration-regression.test.mjs tests/full-system-e2e.test.mjs",
     "test:members": "node --experimental-strip-types --test tests/member-tombstones.test.mjs tests/members-keyed-migration.test.mjs tests/members-keyed.integration.test.mjs tests/migration-preflight.test.mjs tests/migration-rollback.integration.test.mjs",
-    "test:invites": "node --test tests/invitations-contract.test.mjs tests/admin-names-contract.test.mjs tests/admin-management-contract.test.mjs",
+    "test:invites": "node --experimental-strip-types --test tests/invitations-contract.test.mjs tests/admin-names-contract.test.mjs tests/admin-management-contract.test.mjs tests/admin-invitation-flow.test.mjs",
     "test:phone": "node --experimental-strip-types --test tests/phone-display.test.mjs",
     "test:rules": "node --test tests/rtdb.rules.test.mjs",
     "test:library": "node --experimental-strip-types --test tests/exercise-library.test.mjs",
@@ -27,7 +27,7 @@
   "dependencies": {
     "@fontsource/ibm-plex-sans-arabic": "5.3.0",
     "@vitejs/plugin-react": "latest",
-    "firebase": "^13.0.0",
+    "firebase": "^13.1.0",
     "lucide-react": "latest",
     "qrcode.react": "latest",
     "react": "latest",
