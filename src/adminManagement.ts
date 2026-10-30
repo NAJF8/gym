@@ -21,7 +21,7 @@ async function request<T>(path: string, method = 'POST', body?: unknown): Promis
   return result as T
 }
 
-export type ManagedAdmin = { uid?: string; invitationId?: string; email: string; displayName?: string; role: 'MANAGER' | 'SUPER_ADMIN' | 'COACH'; active: boolean; status: 'ACTIVE' | 'DISABLED' | 'PENDING'; createdAt?: string; lastLoginAt?: string; updatedAt?: string; updatedBy?: string }
+export type ManagedAdmin = { uid?: string; invitationId?: string; email: string; displayName?: string; role: 'MANAGER' | 'SUPER_ADMIN' | 'COACH'; active: boolean; status: 'ACTIVE' | 'DISABLED' | 'PENDING' | 'CLAIMED' | 'APPLIED' | 'REVOKED' | 'EXPIRED'; createdAt?: string | number; expiresAt?: string | number; claimedAt?: string | number; appliedAt?: string | number; lastLoginAt?: string; updatedAt?: string; updatedBy?: string }
 export const listManagedAdmins = () => request<{ admins: ManagedAdmin[] }>('/v1/admin/management/list')
 export const inviteAdmin = (displayName: string, email: string, role: 'COACH' | 'MANAGER') => request<{ invitationId: string }>('/v1/admin/management/invite', 'POST', { displayName, email, role })
 export const cancelAdminInvitation = (invitationId: string, email: string, role: 'COACH' | 'MANAGER') => request<{ ok: true; invitationId: string; status: 'REVOKED'; idempotent: boolean }>('/v1/admin/management/cancel', 'POST', { invitationId, email, role })
