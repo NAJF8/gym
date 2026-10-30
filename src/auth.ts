@@ -4,6 +4,21 @@ import { adminGoogleProvider, authPersistenceReady, firebaseAuth, firebaseConfig
 
 export type AdminRole = 'SUPER_ADMIN' | 'MANAGER' | 'COACH'
 export type AdminRecord = { role: AdminRole; active: boolean; email?: string; displayName?: string; updatedAt?: string; updatedBy?: string; lastLoginAt?: string }
+const adminRoleLabels: Record<AdminRole, { ar: string; en: string }> = {
+  SUPER_ADMIN: { ar: 'مشرف عام', en: 'Super Admin' },
+  MANAGER: { ar: 'مدير', en: 'Manager' },
+  COACH: { ar: 'كابتن', en: 'Coach' },
+}
+
+/** Keep the stored authorization enum out of user-facing role labels. */
+export function adminRoleLabel(role: AdminRole, locale: 'ar' | 'en' = 'ar') {
+  return adminRoleLabels[role][locale]
+}
+
+export function adminRoleDisplay(role: AdminRole) {
+  return `${adminRoleLabel(role, 'ar')} / ${adminRoleLabel(role, 'en')}`
+}
+
 export type SafeAuthDiagnostics = {
   uid: string | null
   providerId: string | null

@@ -6,6 +6,16 @@ const worker = await readFile(new URL("../worker/src/index.ts", import.meta.url)
 const invitations = await readFile(new URL("../worker/src/invitations.ts", import.meta.url), "utf8");
 const migration = await readFile(new URL("../worker/migrations/0006_admin_names.sql", import.meta.url), "utf8");
 const rules = await readFile(new URL("../database.rules.json", import.meta.url), "utf8");
+const auth = await readFile(new URL("../src/auth.ts", import.meta.url), "utf8");
+const ui = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+
+test("SUPER_ADMIN has truthful Arabic and English labels in every admin surface", () => {
+  assert.match(auth, /SUPER_ADMIN: \{ ar: 'مشرف عام', en: 'Super Admin' \}/);
+  assert.match(auth, /export function adminRoleDisplay/);
+  assert.match(ui, /adminRoleDisplay\(admin\.role\)/);
+  assert.match(ui, /adminRoleDisplay\(item\.role\)/);
+  assert.doesNotMatch(ui, /<input value=\{admin\.role\} readOnly/);
+});
 
 test("invitation names are stored server-side and only COACH/MANAGER can be invited", () => {
   assert.match(migration, /display_name TEXT NOT NULL DEFAULT/);
