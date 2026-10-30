@@ -14,7 +14,7 @@
         }
     },
     "hosting":  {
-                    "site": "alasas-fit-staging",
+                    "site": "gym1-4f1bb",
                     "public":  "dist",
                     "ignore":  [
                                    "firebase.json",
