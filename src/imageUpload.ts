@@ -3,7 +3,7 @@ import { firebaseAuth } from "./firebase";
 const endpoint = String(
   import.meta.env.VITE_IMAGE_UPLOAD_ENDPOINT ||
     import.meta.env.VITE_PIN_SERVICE_ENDPOINT ||
-    (import.meta.env.PROD ? "https://alasas-fit-member-auth.coffee101.workers.dev" : ""),
+    "",
 ).replace(/\/+$/, "");
 
 export const imageUploadConfigured = /^https:\/\//i.test(endpoint) || /^http:\/\/localhost(?::\d+)?$/i.test(endpoint);
@@ -26,7 +26,7 @@ function base64(bytes: Uint8Array) {
 }
 
 export async function uploadPrintImage(slot: PrintImageSlot, file: File): Promise<{ path: string; commitSha: string }> {
-  if (!imageUploadConfigured) throw new Error("رفع الصور غير مهيأ في Staging");
+  if (!imageUploadConfigured) throw new Error("رفع الصور غير مهيأ لهذا الإصدار");
   const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
   if (!allowed.has(file.type)) throw new Error("يسمح فقط بـ PNG أو JPG أو WebP");
   if (file.size <= 0 || file.size > 8 * 1024 * 1024) throw new Error("حجم الصورة يجب أن يكون بين 1 بايت و8MB");
@@ -53,8 +53,8 @@ export async function waitForPrintImageDeployment(commitSha: string, path: strin
     const result = await response.json().catch(() => ({})) as { state?: string; deployedUrl?: string; error?: string };
     if (!response.ok) throw new Error(result.error || "تعذر التحقق من نشر الصورة");
     if (result.state === "deployed" && result.deployedUrl) return result.deployedUrl;
-    if (result.state === "failed") throw new Error("فشل نشر الصورة على Staging؛ بقي الرابط القديم محفوظاً");
-    onProgress?.(result.state === "queued" ? "الصورة في قائمة النشر…" : "جارٍ نشر الصورة على Staging…");
+    if (result.state === "failed") throw new Error("فشل نشر الصورة؛ بقي الرابط القديم محفوظاً");
+    onProgress?.(result.state === "queued" ? "الصورة في قائمة النشر…" : "جارٍ نشر الصورة…");
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
   }
   throw new Error("انتهت مهلة انتظار نشر الصورة؛ بقي الرابط القديم محفوظاً");

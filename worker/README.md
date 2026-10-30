@@ -21,6 +21,8 @@ Required Worker secrets/variables:
 - FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
 - CORS_ORIGINS (comma-separated exact origins; `CORS_ORIGIN` remains the
   single-origin fallback). Never use `*`.
+- IMAGE_BASE_URL (the public Hosting origin used after a print-image deploy;
+  `STAGING_IMAGE_BASE_URL` is retained only as a legacy compatibility fallback).
 - D1 binding PIN_DB using the existing `member_credentials` and
   `pin_attempt_buckets` tables documented in schema.sql. Do not run schema.sql
   against an existing database.

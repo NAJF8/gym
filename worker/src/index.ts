@@ -3,6 +3,8 @@ import { applyInvitation, cancelInvitation, claimLatestInvitation, createInvitat
 
 interface Env {
   PIN_DB: D1Database;
+  /** Backward-compatible alias for deployments that still expose the D1 binding as DB. */
+  DB?: D1Database;
   FIREBASE_DATABASE_URL: string;
   FIREBASE_WEB_API_KEY: string;
   PIN_PEPPER?: string;
@@ -18,13 +20,20 @@ interface Env {
   CORS_ORIGIN?: string;
   CORS_ORIGINS?: string;
   AUTH_DIAGNOSTICS?: string;
+  IMAGE_BASE_URL?: string;
+  /** Deprecated Staging name kept only as a compatibility fallback. */
+  STAGING_IMAGE_BASE_URL?: string;
   GITHUB_APP_ID?: string;
   GITHUB_INSTALLATION_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
   GITHUB_OWNER?: string;
   GITHUB_REPO?: string;
   GITHUB_BRANCH?: string;
-  STAGING_IMAGE_BASE_URL?: string;
+}
+
+function ensureDatabaseBinding(env: Env) {
+  if (!env.PIN_DB && env.DB) env.PIN_DB = env.DB;
+  if (!env.PIN_DB) throw new Error("PIN_DB_NOT_CONFIGURED");
 }
 
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -172,7 +181,7 @@ async function githubInstallationToken(env: Env) {
   const jwt = `${header}.${claims}.${encodeBase64Url(signature)}`;
   const response = await fetch(`https://api.github.com/app/installations/${config.installationId}/access_tokens`, {
     method: "POST",
-    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" },
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${jwt}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28" },
   });
   if (!response.ok) throw new Error("GITHUB_AUTH_FAILED");
   const body = await response.json() as { token?: string };
@@ -184,7 +193,7 @@ async function githubRequest(env: Env, path: string, init: RequestInit = {}) {
   const { token, config } = await githubInstallationToken(env);
   const response = await fetch(`https://api.github.com${path}`, {
     ...init,
-    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28", ...(init.headers || {}) },
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28", ...(init.headers || {}) },
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -223,6 +232,8 @@ async function imageUploadRateLimit(env: Env, actorUid: string, request: Request
 
 async function uploadPrintImage(env: Env, request: Request) {
   const actorUid = await verifyAdmin(env, request);
+  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string } | null;
+  if (actor?.role !== "SUPER_ADMIN" && actor?.role !== "MANAGER") throw new Error("SUPER_ADMIN_REQUIRED");
   await imageUploadRateLimit(env, actorUid, request);
   const body = await request.json() as { slot?: unknown; contentType?: unknown; content?: unknown };
   const slot = typeof body.slot === "string" && body.slot in imageSlots ? body.slot as keyof typeof imageSlots : "";
@@ -241,7 +252,7 @@ async function uploadPrintImage(env: Env, request: Request) {
   const upload = await githubRequest(env, `/repos/${config.owner}/${config.repo}/contents/${encodedPath}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ message: `chore(staging): upload ${imageSlots[slot].prefix}`, content, branch: config.branch }),
+    body: JSON.stringify({ message: `chore: upload ${imageSlots[slot].prefix}`, content, branch: config.branch }),
   });
   const commit = typeof upload.body.commit === "object" && upload.body.commit ? upload.body.commit as { sha?: unknown } : {};
   const commitSha = typeof commit.sha === "string" ? commit.sha : "";
@@ -254,20 +265,23 @@ async function uploadPrintImage(env: Env, request: Request) {
 }
 
 async function imageDeploymentStatus(env: Env, request: Request) {
-  await verifyAdmin(env, request);
+  const actorUid = await verifyAdmin(env, request);
+  const actor = await firebaseGet(env, `admins/${encodeURIComponent(actorUid)}`, await serviceAccessToken(env)) as { role?: string } | null;
+  if (actor?.role !== "SUPER_ADMIN" && actor?.role !== "MANAGER") throw new Error("SUPER_ADMIN_REQUIRED");
   const body = await request.json() as { commitSha?: unknown; path?: unknown };
   const commitSha = typeof body.commitSha === "string" && /^[0-9a-f]{7,64}$/i.test(body.commitSha) ? body.commitSha : "";
   const path = typeof body.path === "string" && /^public\/uploads\/print\/[A-Za-z0-9_.-]+\.(png|jpg|webp)$/.test(body.path) ? body.path : "";
   if (!commitSha || !path) throw new Error("IMAGE_STATUS_INVALID");
   const { token, config } = await githubInstallationToken(env);
-  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=20`, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-staging-worker", "x-github-api-version": "2022-11-28" } });
+  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=20`, { headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "alasas-fit-worker", "x-github-api-version": "2022-11-28" } });
   if (!response.ok) throw new Error("GITHUB_API_FAILED");
   const runs = await response.json() as { workflow_runs?: Array<{ status?: string; conclusion?: string }> };
   const run = runs.workflow_runs?.[0];
   if (!run) return json({ state: "queued" }, 200, cors(env, request.headers.get("origin") || ""));
   if (run.status !== "completed") return json({ state: "running" }, 200, cors(env, request.headers.get("origin") || ""));
   if (run.conclusion !== "success") return json({ state: "failed" }, 200, cors(env, request.headers.get("origin") || ""));
-  const base = (env.STAGING_IMAGE_BASE_URL || "https://alasas-fit-staging.web.app").replace(/\/$/, "");
+  const base = (env.IMAGE_BASE_URL || env.STAGING_IMAGE_BASE_URL || "").replace(/\/$/, "");
+  if (!base) throw new Error("IMAGE_BASE_URL_NOT_CONFIGURED");
   return json({ state: "deployed", deployedUrl: `${base}/${path.slice("public/".length)}` }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
@@ -709,6 +723,7 @@ export default {
     if (origin && !allowedOrigins(env).includes(origin)) return json({ error: "CORS_ORIGIN_DENIED" }, 403, headers);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     try {
+      ensureDatabaseBinding(env);
       const url = new URL(request.url);
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, headers);
       if (url.pathname === "/v1/admin/image-upload") return await uploadPrintImage(env, request);
@@ -728,8 +743,44 @@ export default {
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
       const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "IMAGE_UPLOAD_RATE_LIMITED" ? 429 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" || code === "GITHUB_BRANCH_PROTECTED" || code === "PIN_LEGACY_HASH_ONLY" || code === "PIN_NOT_ACTIVE" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
-      const safeClientErrors = new Set(["GITHUB_UPLOAD_NOT_CONFIGURED", "GITHUB_BRANCH_PROTECTED", "IMAGE_TYPE_INVALID", "IMAGE_CONTENT_INVALID", "IMAGE_UPLOAD_RATE_LIMITED", "GITHUB_CONTENT_VERIFY_FAILED", "PIN_LEGACY_HASH_ONLY", "PIN_NOT_ACTIVE", "PHONE_ALREADY_BOUND", "MEMBER_INACTIVE", "MEMBER_DELETED", "DISPLAY_NAME_INVALID"]);
-      const body: Record<string, unknown> = { error: code === "ADMIN_REQUIRED" ? "صلاحية المدير مطلوبة" : authRequired ? "تسجيل الدخول مطلوب" : code === "PIN_LEGACY_HASH_ONLY" ? "الرمز القديم محفوظ كـHash فقط قبل تفعيل التشفير؛ اضغط إعادة تعيين PIN لإصدار رمز جديد" : code === "PIN_NOT_ACTIVE" ? "رمز الدخول غير فعال لهذا المشترك؛ اضغط إعادة تعيين PIN" : code === "PHONE_ALREADY_BOUND" ? "رقم الهاتف مرتبط بمشترك آخر" : safeClientErrors.has(code) ? code : "تعذر تنفيذ الطلب", code };
+      const clientErrors: Record<string, string> = {
+        GITHUB_UPLOAD_NOT_CONFIGURED: "رفع الصور غير مهيأ في هذه البيئة؛ لم يتم تغيير الصورة الحالية",
+        GITHUB_BRANCH_PROTECTED: "الفرع محمي؛ لم يتم نشر الصورة",
+        GITHUB_CONTENT_VERIFY_FAILED: "تم الرفع لكن تعذر التحقق من الملف المنشور؛ لم يتم اعتماد الصورة",
+        IMAGE_TYPE_INVALID: "نوع الصورة غير مدعوم؛ استخدم PNG أو JPEG أو WebP",
+        IMAGE_CONTENT_INVALID: "محتوى الصورة غير صالح أو يتجاوز الحجم المسموح",
+        IMAGE_UPLOAD_RATE_LIMITED: "تم تجاوز حد رفع الصور مؤقتاً؛ أعد المحاولة لاحقاً",
+        PIN_LEGACY_HASH_ONLY: "الرمز القديم محفوظ كـHash فقط؛ استخدم إعادة تعيين PIN لإصدار رمز جديد",
+        PIN_NOT_ACTIVE: "رمز الدخول غير فعال لهذا المشترك؛ استخدم إعادة تعيين PIN",
+        PHONE_ALREADY_BOUND: "رقم الهاتف مرتبط بمشترك آخر",
+        MEMBER_INACTIVE: "العضوية غير فعالة حالياً؛ راجع إدارة الجيم",
+        MEMBER_DELETED: "تم حذف العضوية ولا يمكن استخدامها",
+        MEMBER_NOT_FOUND: "لم يتم العثور على العضوية المطلوبة",
+        MEMBER_PHONE_MISMATCH: "رقم الهاتف لا يطابق العضوية المطلوبة",
+        DISPLAY_NAME_INVALID: "أدخل اسماً صحيحاً يحتوي على حرف واحد على الأقل",
+        INVITATION_NOT_FOUND: "لا توجد دعوة معلقة لهذا البريد في بيئة Staging",
+        INVITATION_EXPIRED: "انتهت صلاحية الدعوة؛ اطلب دعوة جديدة",
+        INVITATION_NOT_PENDING: "الدعوة لم تعد معلقة، لذلك لم يتغير وضعها",
+        INVITATION_TARGET_MISMATCH: "بيانات الدعوة لا تطابق السجل الموجود",
+        INVITATION_INVALID: "تحقق من البريد والدور قبل إنشاء الدعوة",
+        INVITATION_CANCEL_INVALID: "بيانات إلغاء الدعوة غير صالحة",
+        INVITATION_APPLY_RETRYABLE: "تم التحقق من Google لكن لم تكتمل مزامنة الدعوة؛ أعد المحاولة",
+        EXISTING_ADMIN_PROTECTED: "الحساب لديه صلاحية موجودة أو محمية؛ لم يتم استبدالها",
+        SELF_INVITE_FORBIDDEN: "لا يمكنك إنشاء دعوة لحسابك الحالي",
+        SUPER_ADMIN_REQUIRED: "هذه العملية متاحة للـSuper Admin فقط",
+        ADMIN_REQUIRED: "حساب Google مسجل، لكنه لا يملك صلاحية مدير فعالة",
+        ADMIN_NOT_FOUND: "لم يتم العثور على حساب المدير المطلوب",
+        ADMIN_UPDATE_INVALID: "عملية تعديل المدير غير صالحة",
+        SELF_CHANGE_FORBIDDEN: "لا يمكنك تعديل صلاحيات حسابك الحالي من هنا",
+        LAST_SUPER_ADMIN: "لا يمكن تعطيل أو إزالة آخر Super Admin",
+        CREDENTIAL_INVALID: "رقم الهاتف أو رمز الدخول غير صحيح",
+        SESSION_INVALID: "انتهت جلسة المشترك؛ سجّل الدخول مرة أخرى",
+      };
+      const safeReasonCodes = new Set(Object.keys(clientErrors));
+      const body: Record<string, unknown> = {
+        error: clientErrors[code] || (code === "ADMIN_REQUIRED" ? "حساب Google مسجل، لكنه لا يملك صلاحية مدير فعالة" : authRequired ? "تسجيل الدخول مطلوب" : "تعذر تنفيذ الطلب"),
+      };
+      if (safeReasonCodes.has(code)) body.reason = code;
       if (env.AUTH_DIAGNOSTICS === "true" && authStage) body.auth_failure_stage = authStage;
       return json(body, status, headers);
     }

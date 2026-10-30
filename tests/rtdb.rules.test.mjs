@@ -34,11 +34,16 @@ before(async () => {
         super: { role: 'SUPER_ADMIN', active: true, email: 'super@example.test' },
         super2: { role: 'SUPER_ADMIN', active: true, email: 'super2@example.test' },
         manager: { role: 'MANAGER', active: true, email: 'manager@example.test' },
+        coach: { role: 'COACH', active: true, email: 'coach@example.test' },
         inactive: { role: 'MANAGER', active: false, email: 'inactive@example.test' },
       },
       appData: { schemaVersion: 1, membersById: { memberA: { id: 'memberA', name: 'A', version: 1 } }, deletedMemberIds: {} },
       publicExercises: {
         'bench-press': { id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://www.youtube.com/watch?v=old' },
+      },
+      publicCourses: {
+        'course-safe': { id: 'course-safe', name: 'كورس عام', days: [] },
+        'member-memberA': { id: 'member-memberA', name: 'خطة عضو', notes: 'خاص', days: [] },
       },
       membersByUid: {
         memberA: { active: true, name: 'A' },
@@ -65,6 +70,15 @@ test('public exercise projection is readable without member data and writable on
   await assertSucceeds(set(ref(verifiedContext('manager').database(), 'publicExercises/bench-press'), {
     id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://youtu.be/new',
   }))
+})
+
+test('member-derived public course projections are not readable anonymously and public course writes are shaped', async () => {
+  const publicDb = env.unauthenticatedContext().database()
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(get(ref(publicDb, 'publicCourses/course-safe')))
+  await assertFails(get(ref(publicDb, 'publicCourses/member-memberA')))
+  await assertFails(set(ref(manager, 'publicCourses/course-unsafe'), { name: 'x', days: [] }))
+  await assertSucceeds(set(ref(manager, 'publicCourses/course-safe'), { id: 'course-safe', name: 'كورس محدث', days: [] }))
 })
 
 test('public exercise video validation rejects unsafe, encoded, spaced, and unapproved URLs', async () => {
@@ -108,6 +122,14 @@ test('manager can use appData but cannot modify admin roles', async () => {
   await assertFails(set(ref(db, 'admins/another'), { role: 'SUPER_ADMIN', active: true }))
   await assertFails(set(ref(db, 'admins/manager'), { role: 'SUPER_ADMIN', active: true }))
   await assertFails(set(ref(db, 'admins/new-manager'), { role: 'MANAGER', active: true, email: 'new@example.test' }))
+})
+
+test('active COACH can use member records but cannot change settings or admin roles', async () => {
+  const db = verifiedContext('coach').database()
+  await assertSucceeds(get(ref(db, 'appData')))
+  await assertSucceeds(set(ref(db, 'appData/membersById/coach-member'), { id: 'coach-member', name: 'Coach member', version: 1 }))
+  await assertFails(set(ref(db, 'appData/settings/gymName'), 'coach-must-not-change-this'))
+  await assertFails(set(ref(db, 'admins/another-coach'), { role: 'COACH', active: true, email: 'another-coach@example.test' }))
 })
 
 test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {

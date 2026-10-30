@@ -16,7 +16,6 @@ test("day notes remain independently editable and are included in member/course 
 
 test("RTDB projections carry bounded per-day notes to read-only consumers", () => {
   assert.match(dataSync, /dayNotes: normalizeDayNotes\(course\.dayNotes, Array\.isArray\(course\.days\) \? course\.days\.length : 0\)/);
-  assert.match(dataSync, /dayNotes: normalizeDayNotes\(m\.dayNotes, Array\.isArray\(m\.days\) \? m\.days\.length : 0\)/);
   assert.match(dataSync, /dayNotes: normalizeDayNotes\(member\.dayNotes, Array\.isArray\(member\.days\) \? member\.days\.length : 0\)/);
   assert.match(dataSync, /slice\(0, 2000\)/);
 });

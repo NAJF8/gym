@@ -427,33 +427,9 @@ export async function writeAdminData<T>(
   for (const c of nextCourses) {
     if (c && typeof c.id === "string" && c.id) nextPublicCourses.set(c.id, toPublicCourse(c));
   }
-  for (const m of nextMembers) {
-    if (m && typeof m.id === "string" && m.id) {
-      const cid = `member-${m.id}`;
-      nextPublicCourses.set(cid, stripUndefined({
-        id: cid,
-        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
-        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
-        dayNotes: normalizeDayNotes(m.dayNotes, Array.isArray(m.days) ? m.days.length : 0),
-        days: Array.isArray(m.days) ? m.days : [],
-      }));
-    }
-  }
   const oldPublicCourses = new Map<string, Record<string, unknown>>();
   for (const c of oldCourses) {
     if (c && typeof c.id === "string" && c.id) oldPublicCourses.set(c.id, toPublicCourse(c));
-  }
-  for (const m of oldMembers) {
-    if (m && typeof m.id === "string" && m.id) {
-      const cid = `member-${m.id}`;
-      oldPublicCourses.set(cid, stripUndefined({
-        id: cid,
-        name: typeof m.courseName === "string" && m.courseName.trim() ? m.courseName.trim() : "كورس تدريبي مخصص",
-        notes: typeof m.notes === "string" ? m.notes.slice(0, 1000) : "",
-        dayNotes: normalizeDayNotes(m.dayNotes, Array.isArray(m.days) ? m.days.length : 0),
-        days: Array.isArray(m.days) ? m.days : [],
-      }));
-    }
   }
   const publicCourseIds = new Set([...nextPublicCourses.keys(), ...oldPublicCourses.keys()]);
   for (const cid of publicCourseIds) {

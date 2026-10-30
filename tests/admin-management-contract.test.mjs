@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 
 const managementClient = await readFile(new URL("../src/adminManagement.ts", import.meta.url), "utf8");
 const ui = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+const memberPinClient = await readFile(new URL("../src/memberPin.ts", import.meta.url), "utf8");
+const imageUploadClient = await readFile(new URL("../src/imageUpload.ts", import.meta.url), "utf8");
 const worker = await readFile(new URL("../worker/src/index.ts", import.meta.url), "utf8");
 const invitations = await readFile(new URL("../worker/src/invitations.ts", import.meta.url), "utf8");
 
@@ -12,6 +14,13 @@ test("admin management client requires an explicit environment endpoint", () => 
   assert.doesNotMatch(managementClient, /alasas-fit-member-auth\.coffee101\.workers\.dev/);
   assert.match(managementClient, /خدمة إدارة المدراء غير مهيأة لهذا الإصدار/);
   assert.match(managementClient, /عنوان Worker وCORS/);
+});
+
+test("member PIN and image clients do not silently fall back to Production", () => {
+  assert.doesNotMatch(memberPinClient, /alasas-fit-member-auth\.coffee101\.workers\.dev/);
+  assert.doesNotMatch(imageUploadClient, /alasas-fit-member-auth\.coffee101\.workers\.dev/);
+  assert.match(memberPinClient, /VITE_PIN_SERVICE_ENDPOINT/);
+  assert.match(imageUploadClient, /VITE_PIN_SERVICE_ENDPOINT/);
 });
 
 test("admin management UI distinguishes loading, error, and empty states", () => {
@@ -29,6 +38,13 @@ test("management routes keep CORS and server-side Google-admin checks explicit",
   assert.match(worker, /user\.emailVerified !== true/);
   assert.match(worker, /providerId === "google\.com"/);
   assert.match(worker, /actor\?\.role !== ['"]SUPER_ADMIN['"]/);
+  assert.match(worker, /function ensureDatabaseBinding/);
+  assert.match(worker, /if \(!env\.PIN_DB && env\.DB\) env\.PIN_DB = env\.DB/);
+});
+
+test("GitHub-backed print image routes exclude COACH", () => {
+  assert.match(worker, /async function uploadPrintImage[\s\S]*actor\?\.role !== "SUPER_ADMIN" && actor\?\.role !== "MANAGER"/);
+  assert.match(worker, /async function imageDeploymentStatus[\s\S]*actor\?\.role !== "SUPER_ADMIN" && actor\?\.role !== "MANAGER"/);
 });
 
 test("invitation cancellation is exact-match, pending-only, audited, and idempotent", () => {
@@ -40,4 +56,12 @@ test("invitation cancellation is exact-match, pending-only, audited, and idempot
   assert.match(invitations, /status = 'PENDING'/);
   assert.match(invitations, /INVITE_CANCELLED/);
   assert.match(invitations, /idempotent: true/);
+});
+
+test("worker errors expose a safe reason and never echo internal error codes", () => {
+  assert.match(worker, /const clientErrors: Record<string, string>/);
+  assert.match(worker, /body\.reason = code/);
+  assert.doesNotMatch(worker, /code:\s*code/);
+  assert.match(worker, /INVITATION_EXPIRED: .*انتهت صلاحية الدعوة/);
+  assert.match(worker, /INVITATION_APPLY_RETRYABLE: .*لم تكتمل مزامنة الدعوة/);
 });

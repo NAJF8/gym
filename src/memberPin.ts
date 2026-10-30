@@ -30,7 +30,7 @@ export type PinAuditLogEntry = {
 
 // The Worker contract is versioned and identical across environments.
 // Local builds stay fail-closed unless an endpoint is explicitly supplied.
-const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || (import.meta.env.PROD ? 'https://alasas-fit-member-auth.coffee101.workers.dev' : '')).replace(/\/+$/, '')
+const endpoint = String(import.meta.env.VITE_PIN_SERVICE_ENDPOINT || '').replace(/\/+$/, '')
 export const pinServiceConfigured = /^https:\/\//i.test(endpoint) || /^http:\/\/localhost(?::\d+)?$/i.test(endpoint)
 
 function requireEndpoint() {
@@ -53,12 +53,13 @@ async function request<T>(path: string, init: RequestInit = {}) {
     ...init,
     headers: { 'content-type': 'application/json', ...(init.headers || {}) },
   })
-  const body = await response.json().catch(() => ({}))
+  const body = await response.json().catch(() => ({})) as { error?: unknown; reason?: unknown }
   if (!response.ok) {
     if (response.status === 429 && path === '/v1/member/login') {
       throw new Error('تم حظر المحاولات مؤقتاً لمدة 15 دقيقة بسبب تكرار المحاولات الخاطئة. يرجى الانتظار أو مراجعة الكابتن.')
     }
-    if (response.status === 403 && body?.reason === 'MEMBER_INACTIVE') {
+    if (response.status === 403 && (body?.reason === 'MEMBER_INACTIVE' || body?.reason === 'MEMBER_DELETED')) {
+      if (body.reason === 'MEMBER_DELETED') throw new Error('تم حذف العضوية ولا يمكن استخدامها.')
       throw new Error('العضوية غير فعالة حالياً، يرجى مراجعة إدارة الجيم.')
     }
     throw new Error(typeof body.error === 'string' ? body.error : 'تعذر الاتصال بخدمة PIN الموثوقة')

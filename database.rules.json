@@ -86,8 +86,12 @@
       }
     },
     "publicCourses": {
-      ".read": true,
-      ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
+      ".read": false,
+      ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+      "$courseId": {
+        ".read": "!$courseId.matches(/^member-.*/)",
+        ".validate": "newData.child('id').isString() && newData.child('id').val() === $courseId && newData.child('id').val().length <= 128 && newData.child('name').isString() && newData.child('name').val().length <= 200 && (!newData.hasChild('notes') || (newData.child('notes').isString() && newData.child('notes').val().length <= 1000))"
+      }
     },
     "publicSettings": {
       ".read": true,
