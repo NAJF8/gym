@@ -4,7 +4,8 @@
 --
 -- This rebuild is required because SQLite cannot alter a CHECK constraint in
 -- place. It preserves every invitation row and recreates the known indexes.
-
+-- It does not read or rewrite member_credentials, pin_attempt_buckets, or
+-- member_sessions.
 CREATE TABLE admin_invitations_v2 (
   invitation_id TEXT PRIMARY KEY,
   email TEXT NOT NULL,
@@ -52,6 +53,6 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
   details TEXT,
   created_at INTEGER NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx
   ON admin_audit_logs(created_at);
+

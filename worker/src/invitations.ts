@@ -53,11 +53,13 @@ export async function cancelInvitation(db: Db, input: { invitationId: string; em
 
 export async function claimLatestInvitation(db: Db, email: string, uid: string, now: number) {
   const result = await db.batch([
-    db.prepare("UPDATE admin_invitations SET status = 'CLAIMED', claimed_uid = ?, claimed_at = ?, updated_at = ? WHERE email = ? AND status = 'PENDING' AND expires_at > ?").bind(uid, now, now, email, now),
-    db.prepare("SELECT * FROM admin_invitations WHERE email = ? ORDER BY created_at DESC LIMIT 1").bind(email),
+    // Legacy rows may contain SUPER_ADMIN even though current invitations do not.
+    // Keep those rows untouched and never let them reach Firebase role assignment.
+    db.prepare("UPDATE admin_invitations SET status = 'CLAIMED', claimed_uid = ?, claimed_at = ?, updated_at = ? WHERE email = ? AND role IN ('COACH', 'MANAGER') AND status = 'PENDING' AND expires_at > ?").bind(uid, now, now, email, now),
+    db.prepare("SELECT * FROM admin_invitations WHERE email = ? AND role IN ('COACH', 'MANAGER') ORDER BY created_at DESC LIMIT 1").bind(email),
   ]);
   const row = (result[1]?.results?.[0] || null) as InvitationRow | null;
-  if (!row || !(["CLAIMED", "PENDING"].includes(row.status))) return null;
+  if (!row || !validInvitationRole(row.role) || !(["CLAIMED", "PENDING"].includes(row.status))) return null;
   if (row.status === "PENDING") return row.expires_at <= now ? row : null;
   if (row.claimed_uid !== uid) return null;
   return row;

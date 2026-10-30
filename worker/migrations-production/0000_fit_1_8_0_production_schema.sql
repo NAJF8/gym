@@ -1,8 +1,17 @@
 -- Production-only additive migration for the verified legacy D1 schema.
 --
--- Apply only after the production D1 preflight confirms the legacy PIN/session
--- schema and that these invitation/audit tables do not already exist.
--- Existing PIN/session rows are preserved.
+-- Production currently has the legacy 0001_member_auth.sql migration and the
+-- PIN/session tables, but not the newer source migration names. Keep this file
+-- in a separate migrations directory so Wrangler does not replay the mixed
+-- Staging history against Production.
+--
+-- Preconditions, checked before applying:
+--   * member_credentials exists and does not have pin_cipher;
+--   * member_sessions and pin_attempt_buckets exist;
+--   * admin_invitations and admin_audit_logs do not exist;
+--   * no unexpected schema drift exists in the existing PIN/session tables.
+--
+-- This migration does not update or delete existing PIN/session rows.
 
 ALTER TABLE member_credentials ADD COLUMN pin_cipher TEXT;
 

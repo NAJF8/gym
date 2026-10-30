@@ -8,7 +8,7 @@ function invitationDb() {
   const audit = [];
   const execute = (sql, args) => {
     if (sql.includes("SELECT * FROM admin_invitations WHERE email")) {
-      const row = invitations.filter(item => item.email === args[0]).sort((a, b) => b.created_at - a.created_at)[0];
+      const row = invitations.filter(item => item.email === args[0] && (item.role === "COACH" || item.role === "MANAGER")).sort((a, b) => b.created_at - a.created_at)[0];
       return { results: row ? [row] : [] };
     }
     if (sql.startsWith("UPDATE admin_invitations SET status = 'REVOKED'")) {
@@ -22,7 +22,7 @@ function invitationDb() {
     }
     if (sql.startsWith("UPDATE admin_invitations SET status = 'CLAIMED'")) {
       const [uid, now, , email, expiresAfter] = args;
-      const row = invitations.find(item => item.email === email && item.status === "PENDING" && item.expires_at > expiresAfter);
+      const row = invitations.find(item => item.email === email && (item.role === "COACH" || item.role === "MANAGER") && item.status === "PENDING" && item.expires_at > expiresAfter);
       if (!row) return { meta: { changes: 0 } };
       row.status = "CLAIMED"; row.claimed_uid = uid; row.claimed_at = now; row.updated_at = now;
       return { meta: { changes: 1 } };
@@ -42,7 +42,7 @@ function invitationDb() {
     bind: (...next) => statement(sql, next),
     run: async () => execute(sql, args),
     first: async () => {
-      if (sql.includes("SELECT * FROM admin_invitations WHERE email")) return invitations.filter(item => item.email === args[0]).sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+      if (sql.includes("SELECT * FROM admin_invitations WHERE email")) return invitations.filter(item => item.email === args[0] && (item.role === "COACH" || item.role === "MANAGER")).sort((a, b) => b.created_at - a.created_at)[0] ?? null;
       if (sql.includes("SELECT 1 FROM admin_invitations WHERE invitation_id")) return applied.has(`${args[0]}:${args[1]}`) ? { 1: 1 } : null;
       return null;
     },
@@ -57,6 +57,7 @@ function flowContext() {
   const identities = {
     "super-token": { localId: "super-uid", email: "mohameadalhaear100@gmail.com", emailVerified: true, providerUserInfo: [{ providerId: "google.com" }] },
     "manager-token": { localId: "manager-uid", email: "manager@example.test", emailVerified: true, providerUserInfo: [{ providerId: "google.com" }] },
+    "legacy-token": { localId: "legacy-uid", email: "legacy@example.test", emailVerified: true, providerUserInfo: [{ providerId: "google.com" }] },
     "intruder-token": { localId: "intruder-uid", email: "intruder@example.test", emailVerified: true, providerUserInfo: [{ providerId: "google.com" }] },
   };
   const env = { PIN_DB: db, FIREBASE_DATABASE_URL: "https://firebase.test", FIREBASE_WEB_API_KEY: "test-key", LOCAL_EMULATOR_ONLY: "true", FIREBASE_SERVICE_ACCESS_TOKEN: "service-token", FIREBASE_IDENTITY_TOOLKIT_URL: "https://identity.test/lookup", CORS_ORIGINS: "https://fit.alasas.tech,https://alasas-fit-staging.web.app" };
@@ -98,6 +99,7 @@ test("invited Google manager is activated once, persists across a new session, a
   assert.equal(ctx.db.invitations[0].status, "APPLIED");
   assert.deepEqual(ctx.admins.get("manager-uid").role, "MANAGER");
 
+  // A later request represents signing in again after a client-side logout.
   const relogin = await ctx.call("/v1/admin/profile", "manager-token", {});
   assert.equal(relogin.status, 200);
   assert.equal((await relogin.json()).role, "MANAGER");
@@ -111,4 +113,13 @@ test("official-domain preflight is allowed only when explicitly configured", asy
   const response = await worker.fetch(new Request("https://worker.test/v1/admin/management/invite", { method: "OPTIONS", headers: { origin: "https://fit.alasas.tech" } }), ctx.env);
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("access-control-allow-origin"), "https://fit.alasas.tech");
+});
+
+test("legacy SUPER_ADMIN invitations cannot be accepted", async () => {
+  const ctx = flowContext();
+  ctx.db.invitations.push({ invitation_id: "legacy-super", email: "legacy@example.test", display_name: "Legacy", role: "SUPER_ADMIN", status: "PENDING", expires_at: Date.now() + 60_000, created_at: Date.now(), created_by_uid: "old-admin", claimed_uid: null, claimed_at: null, applied_uid: null, applied_at: null, updated_at: Date.now() });
+  const response = await ctx.call("/v1/admin/management/accept", "legacy-token");
+  assert.equal(response.status, 400);
+  assert.equal(ctx.db.invitations.at(-1).status, "PENDING");
+  assert.equal(ctx.admins.has("legacy-uid"), false);
 });

@@ -14,6 +14,10 @@
       ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
       "settings": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
+        "showBarcodes": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
+          ".validate": "newData.isBoolean()"
+        },
         "logo": {
           ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
           ".validate": "(newData.isString() && newData.val().length <= 512)"
@@ -85,15 +89,14 @@
       ".read": false,
       ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
       "$courseId": {
-        ".read": "!$courseId.matches(/^member-.*/) && $courseId.matches(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/)",
-        ".validate": "newData.hasChildren(['id', 'name']) && newData.child('id').isString() && newData.child('id').val() === $courseId && newData.child('id').val().length <= 128 && newData.child('name').isString() && newData.child('name').val().length <= 200 && (!newData.hasChild('notes') || (newData.child('notes').isString() && newData.child('notes').val().length <= 1000))",
-        "id": { ".validate": "newData.isString() && newData.val() === $courseId && newData.val().length <= 128" },
-        "name": { ".validate": "newData.isString() && newData.val().length <= 200" },
-        "notes": { ".validate": "newData.isString() && newData.val().length <= 1000" },
-        "dayNotes": { ".validate": "newData.exists()" },
-        "days": { ".validate": "newData.exists()" },
-        "$other": { ".validate": false }
+        ".read": "!$courseId.matches(/^member-.*/)",
+        ".validate": "newData.child('id').isString() && newData.child('id').val() === $courseId && newData.child('id').val().length <= 128 && newData.child('name').isString() && newData.child('name').val().length <= 200 && (!newData.hasChild('notes') || (newData.child('notes').isString() && newData.child('notes').val().length <= 1000))"
       }
+    },
+    "publicSettings": {
+      ".read": true,
+      ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
+      ".validate": "newData.hasChildren(['showBarcodes']) && newData.child('showBarcodes').isBoolean()"
     },
     "bootstrap": {
       ".read": false,

@@ -42,8 +42,8 @@ before(async () => {
         'bench-press': { id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://www.youtube.com/watch?v=old' },
       },
       publicCourses: {
-        'course-1': { id: 'course-1', name: 'دورة اختبار', notes: '', days: [], dayNotes: {} },
-        'member-memberA': { id: 'member-memberA', name: 'بيانات خاصة' },
+        'course-safe': { id: 'course-safe', name: 'كورس عام', days: [] },
+        'member-memberA': { id: 'member-memberA', name: 'خطة عضو', notes: 'خاص', days: [] },
       },
       membersByUid: {
         memberA: { active: true, name: 'A' },
@@ -72,6 +72,15 @@ test('public exercise projection is readable without member data and writable on
   }))
 })
 
+test('member-derived public course projections are not readable anonymously and public course writes are shaped', async () => {
+  const publicDb = env.unauthenticatedContext().database()
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(get(ref(publicDb, 'publicCourses/course-safe')))
+  await assertFails(get(ref(publicDb, 'publicCourses/member-memberA')))
+  await assertFails(set(ref(manager, 'publicCourses/course-unsafe'), { name: 'x', days: [] }))
+  await assertSucceeds(set(ref(manager, 'publicCourses/course-safe'), { id: 'course-safe', name: 'كورس محدث', days: [] }))
+})
+
 test('public exercise video validation rejects unsafe, encoded, spaced, and unapproved URLs', async () => {
   const db = verifiedContext('manager').database()
   const base = { id: 'unsafe-video', name: 'اختبار', muscle: 'تمارين الصدر', sets: 3, reps: '10', rest: '60 ثانية' }
@@ -83,20 +92,6 @@ test('public exercise video validation rejects unsafe, encoded, spaced, and unap
   ]) await assertFails(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: '' }))
   await assertSucceeds(set(ref(db, 'publicExercises/unsafe-video'), { ...base, video: 'https://www.youtube.com/watch?v=safe' }))
-})
-
-test('public course reads are limited to safe public IDs and bounded fields', async () => {
-  const anonymous = env.unauthenticatedContext().database()
-  const manager = verifiedContext('manager').database()
-  await assertFails(get(ref(anonymous, 'publicCourses')))
-  await assertSucceeds(get(ref(anonymous, 'publicCourses/course-1')))
-  await assertFails(get(ref(anonymous, 'publicCourses/member-memberA')))
-  await assertFails(set(ref(manager, 'publicCourses/course-unsafe'), {
-    id: 'course-unsafe', name: 'اختبار', authUid: 'should-not-be-stored',
-  }))
-  await assertSucceeds(set(ref(manager, 'publicCourses/course-safe'), {
-    id: 'course-safe', name: 'دورة آمنة', notes: '', days: [], dayNotes: {},
-  }))
 })
 
 test('authorized multi-location exercise write is readable back by id', async () => {
@@ -175,6 +170,23 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   await assertSucceeds(set(ref(adminSession, 'appData/membersById/sync-marker'), { id: 'sync-marker', name: 'emulator-sync-ok', version: 1 }))
   const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/membersById/sync-marker')))
   assert.equal(snapshot.val().name, 'emulator-sync-ok')
+})
+
+test('barcode visibility is a boolean setting writable only by SUPER_ADMIN and publicly readable', async () => {
+  const superAdmin = verifiedContext('super').database()
+  const manager = verifiedContext('manager').database()
+  const publicDb = env.unauthenticatedContext().database()
+
+  await assertSucceeds(set(ref(superAdmin, 'appData/settings/showBarcodes'), false))
+  await assertSucceeds(set(ref(superAdmin, 'publicSettings/showBarcodes'), false))
+  const hidden = await assertSucceeds(get(ref(publicDb, 'publicSettings/showBarcodes')))
+  assert.equal(hidden.val(), false)
+
+  await assertFails(set(ref(manager, 'appData/settings/showBarcodes'), true))
+  await assertFails(set(ref(manager, 'publicSettings/showBarcodes'), true))
+  await assertFails(set(ref(superAdmin, 'appData/settings/showBarcodes'), 'false'))
+  await assertFails(set(ref(superAdmin, 'publicSettings/showBarcodes'), 'false'))
+  await assertSucceeds(set(ref(superAdmin, 'appData/settings/showBarcodes'), true))
 })
 
 test('MANAGER can write only scoped print identity fields', async () => {

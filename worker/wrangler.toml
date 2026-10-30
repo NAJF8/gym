@@ -10,7 +10,7 @@ database_id = "69f5c421-9969-47c0-a7ce-4e81d0ed0fdb"
 [vars]
 FIREBASE_DATABASE_URL = "https://alasas-fit-staging-default-rtdb.firebaseio.com"
 CORS_ORIGIN = "http://localhost:4173"
-CORS_ORIGINS = "https://alasas-fit-staging.web.app,https://alasas-fit-staging.firebaseapp.com,http://localhost:4173"
+CORS_ORIGINS = "https://alasas-fit-staging.web.app,https://alasas-fit-staging.firebaseapp.com,https://fit.alasas.tech,http://localhost:4173"
 AUTH_DIAGNOSTICS = "false"
 IMAGE_BASE_URL = "https://alasas-fit-staging.web.app"
 GITHUB_OWNER = "NAJF8"
