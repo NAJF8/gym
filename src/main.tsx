@@ -2079,6 +2079,9 @@ function ExerciseModal({
       <div className="video-admin-status" aria-live="polite">
         {youtubeVideoId(e.video) ? <><CheckCircle2 size={17} /><span><b>رابط YouTube صالح</b><small>سيظهر كفيديو مضمّن في صفحة الشرح.</small></span></> : safeVideoUrl(e.video) ? <><CircleAlert size={17} /><span><b>الرابط مقبول لكن غير موثّق كفيديو YouTube</b><small>لا تستخدم رابط نتائج بحث أو رابطاً تخمينياً.</small></span></> : <><CircleAlert size={17} /><span><b>لم تتم إضافة فيديو موثّق</b><small>يمكن حفظ التمرين بدون فيديو، وستظهر حالة واضحة للمشترك.</small></span></>}
       </div>
+      <div className="video-admin-status" aria-live="polite">
+        {youtubeVideoId(e.video) ? <><CheckCircle2 size={17} /><span><b>رابط YouTube صالح</b><small>سيظهر كفيديو مضمّن في صفحة الشرح.</small></span></> : safeVideoUrl(e.video) ? <><CircleAlert size={17} /><span><b>الرابط مقبول لكن غير موثّق كفيديو YouTube</b><small>لا تستخدم رابط نتائج بحث أو رابطاً تخمينياً.</small></span></> : <><CircleAlert size={17} /><span><b>لم تتم إضافة فيديو موثّق</b><small>يمكن حفظ التمرين بدون فيديو، وستظهر حالة واضحة للمشترك.</small></span></>}
+      </div>
       <label className="full-width-field">
         شرح التمرين وملاحظات الأداء (اختياري)
         <textarea
