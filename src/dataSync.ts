@@ -1,7 +1,7 @@
 import { get, onValue, ref, runTransaction, update, type Unsubscribe } from "firebase/database";
 import { firebaseDatabase } from "./firebase";
 import { safeVideoUrl } from "./videoUrl";
-import { keyedMembers, membersFromData, MEMBER_TOMBSTONES_PATH, MEMBERS_PATH, deleteMemberRecord, upsertMemberRecord } from "./memberStorage";
+import { keyedMembers, membersFromData, MEMBER_TOMBSTONES_PATH, MEMBERS_PATH, deleteMemberRecord, prepareMemberRecord } from "./memberStorage";
 
 export type FirebaseSyncPhase = "update" | "read" | "verify";
 
@@ -165,9 +165,13 @@ export async function deleteAdminMember(memberId: string) {
 }
 
 export async function readAdminMember<T>(memberId: string) {
-  const data = await readAdminData<{ members?: unknown }>();
-  const members = collectionItems(data?.members);
-  return (members.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === memberId) as T | undefined) ?? null;
+  if (!firebaseDatabase) return null;
+  try {
+    const snapshot = await get(ref(firebaseDatabase, `${MEMBERS_PATH}/${memberId}`));
+    return snapshot.exists() ? snapshot.val() as T : null;
+  } catch (error) {
+    throw new FirebaseSyncError("read", firebaseErrorCode(error), "تعذر قراءة سجل المشترك من Firebase RTDB");
+  }
 }
 
 /** Read-only health check for records left behind by an interrupted delete. */
@@ -371,9 +375,12 @@ export async function writeAdminData<T>(
       throw new Error("رابط فيديو غير آمن أو غير معتمد");
     const description = typeof exercise.description === "string" ? exercise.description.trim().slice(0, 1000) : "";
     const image = typeof exercise.image === "string" ? exercise.image.trim().slice(0, 512) : "";
-    const videoReviewStatus = exercise.videoReviewStatus === "verified" && video
+    const list = (value: unknown, limit = 20) => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map(item => item.trim().slice(0, 240)).slice(0, limit)
+      : [];
+    const videoReviewStatus = exercise.videoReviewStatus === "verified" && !!video
       ? "verified"
-      : video
+      : !!video
         ? "needs_review"
         : "none";
     return stripUndefined({
@@ -388,6 +395,12 @@ export async function writeAdminData<T>(
       videoReviewStatus,
       ...(description ? { description } : {}),
       ...(image ? { image } : {}),
+      ...(list(exercise.secondaryMuscles, 12).length ? { secondaryMuscles: list(exercise.secondaryMuscles, 12) } : {}),
+      ...(list(exercise.equipment, 12).length ? { equipment: list(exercise.equipment, 12) } : {}),
+      ...(list(exercise.steps).length ? { steps: list(exercise.steps) } : {}),
+      ...(list(exercise.safetyNotes).length ? { safetyNotes: list(exercise.safetyNotes) } : {}),
+      ...(list(exercise.commonMistakes).length ? { commonMistakes: list(exercise.commonMistakes) } : {}),
+      ...(exercise.anatomyView === "front" || exercise.anatomyView === "back" ? { anatomyView: exercise.anatomyView } : {}),
     }) as Record<string, unknown>;
   };
   const nextExercises = Array.isArray(appData.exercises)
@@ -408,7 +421,7 @@ export async function writeAdminData<T>(
     const old = oldPublic.get(id);
     if (same(next, old)) continue;
     const projection = next || old;
-    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "videoReviewStatus", "description", "image"])
+    for (const field of ["id", "name", "english", "muscle", "sets", "reps", "rest", "video", "videoReviewStatus", "description", "image", "secondaryMuscles", "equipment", "steps", "safetyNotes", "commonMistakes", "anatomyView"])
       updates[`publicExercises/${id}/${field}`] = next ? (projection?.[field] ?? null) : null;
   }
 
@@ -470,9 +483,22 @@ export async function writeAdminData<T>(
   }
 
   try {
+    // Keep all member mutations and their public projections in one RTDB
+    // multi-location update. Rules validate each member's CAS version, while
+    // RTDB commits the complete update atomically: a later failure cannot leave
+    // a member record half-saved beside stale settings or projections.
     for (const operation of memberOperations) {
-      if (operation.type === "upsert") await upsertMemberRecord(firebaseDatabase, operation.member!, operation.previous);
-      else await deleteMemberRecord(firebaseDatabase, operation.id, operation.previous);
+      if (operation.type === "upsert") {
+        updates[`${MEMBERS_PATH}/${operation.id}`] = prepareMemberRecord(operation.member!, operation.previous);
+        continue;
+      }
+      updates[`${MEMBER_TOMBSTONES_PATH}/${operation.id}`] = {
+        deletedAt: new Date().toISOString(),
+        version: typeof operation.previous?.version === "number" ? operation.previous.version : 1,
+      };
+      updates[`${MEMBERS_PATH}/${operation.id}`] = null;
+      const authUid = typeof operation.previous?.authUid === "string" ? operation.previous.authUid : "";
+      if (authUid) updates[`membersByUid/${authUid}`] = null;
     }
     await update(ref(firebaseDatabase), { ...updates });
   } catch (error) {

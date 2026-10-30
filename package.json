@@ -15,7 +15,7 @@
     "verify:live:production": "node scripts/live-deployment-guard.mjs --environment=production",
     "test:browser:staging": "node tests/admin-staging-e2e.mjs",
     "preview": "vite preview",
-    "test": "npm run test:rules && npm run test:video && npm run test:pin && npm run test:members && npm run test:invites && npm run test:library && npm run test:day-notes",
+    "test": "npm run test:rules && npm run test:video && npm run test:pin && npm run test:members && npm run test:invites && npm run test:library && npm run test:day-notes && npm run test:exercise",
     "test:video": "node --experimental-strip-types --test tests/video-url.test.mjs",
     "test:pin": "node --experimental-strip-types --test tests/pin-crypto.test.mjs tests/pin-lockout-concurrent.test.mjs tests/image-url.test.mjs tests/pin-card-contract.test.mjs tests/pin-idempotency-contract.test.mjs tests/pin-enumeration-regression.test.mjs tests/full-system-e2e.test.mjs",
     "test:members": "node --experimental-strip-types --test tests/member-tombstones.test.mjs tests/members-keyed-migration.test.mjs tests/members-keyed.integration.test.mjs tests/migration-preflight.test.mjs tests/migration-rollback.integration.test.mjs",
@@ -23,7 +23,8 @@
     "test:phone": "node --experimental-strip-types --test tests/phone-display.test.mjs",
     "test:rules": "node --test tests/rtdb.rules.test.mjs",
     "test:library": "node --experimental-strip-types --test tests/exercise-library.test.mjs",
-    "test:day-notes": "node --test tests/day-notes-contract.test.mjs"
+    "test:day-notes": "node --test tests/day-notes-contract.test.mjs",
+    "test:exercise": "node --test tests/exercise-details-contract.test.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-arabic": "5.3.0",

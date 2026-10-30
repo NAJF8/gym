@@ -40,6 +40,13 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                 }
                 return null;
               }
+              if (sql.includes("SELECT member_id FROM member_credentials WHERE (firebase_uid = ? OR membership_id = ?)")) {
+                const [firebaseUid, membershipId, memberId] = args;
+                for (const row of credentials.values()) {
+                  if (row.member_id !== memberId && (row.firebase_uid === firebaseUid || row.membership_id === membershipId)) return { member_id: row.member_id };
+                }
+                return null;
+              }
               if (sql.includes("FROM member_credentials WHERE member_id = ?")) {
                 return credentials.get(args[0]) ?? null;
               }
@@ -154,6 +161,17 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                 }
                 return { meta: { changes: 1 } };
               }
+              if (sql.startsWith("UPDATE member_credentials SET firebase_uid = ?, membership_id = ?, phone_e164 = ?, updated_at = ?")) {
+                const [firebaseUid, membershipId, phone, updatedAt, memberId] = args;
+                const row = credentials.get(memberId);
+                if (row) {
+                  row.firebase_uid = firebaseUid;
+                  row.membership_id = membershipId;
+                  row.phone_e164 = phone;
+                  row.updated_at = updatedAt;
+                }
+                return { meta: { changes: 1 } };
+              }
               if (sql.includes("UPDATE member_credentials SET failure_count = CASE")) {
                 const [nowExpired, nowLockCheck, lockUntil, updatedAt, memberId, activeNow] = args;
                 const row = credentials.get(memberId);
@@ -185,6 +203,10 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                   row.credential_version += 1;
                   row.updated_at = updatedAt;
                 }
+                return { meta: { changes: 1 } };
+              }
+              if (sql.startsWith("DELETE FROM member_credentials WHERE member_id = ?")) {
+                credentials.delete(args[0]);
                 return { meta: { changes: 1 } };
               }
               if (sql.startsWith("INSERT INTO pin_attempt_buckets")) {
@@ -373,6 +395,9 @@ test("Full E2E: Captain PIN Eye reveal, Copy, Reset, Audit Log, and Member Login
   assert.equal(firstRevealRes.status, 200);
   const firstRevealBody = await firstRevealRes.json();
   assert.match(firstRevealBody.pin, /^\d{4}$/);
+  assert.equal(firstRevealBody.memberId, "m-001");
+  assert.equal(firstRevealBody.membershipId, "M-1001");
+  assert.equal(firstRevealBody.phoneE164, "+9647701234567");
   const pinA = firstRevealBody.pin;
 
   // 3. Subsequent Captain Eye click reveals the EXACT same 4-digit PIN (decrypted from AES-256-GCM pin_cipher)
@@ -406,6 +431,8 @@ test("Full E2E: Captain PIN Eye reveal, Copy, Reset, Audit Log, and Member Login
   assert.equal(issueBRes.status, 200);
   const issueBBody = await issueBRes.json();
   assert.equal(issueBBody.pin, "4826");
+  assert.equal(issueBBody.memberId, "m-002");
+  assert.equal(issueBBody.membershipId, "M-1002");
 
   const loginARes = await ctx.callWorker("/v1/member/login", { phone: "07701234567", pin: pinA });
   const { sessionToken: tokenA } = await loginARes.json();
@@ -473,6 +500,7 @@ test("Full E2E: Captain PIN Eye reveal, Copy, Reset, Audit Log, and Member Login
 
   const deletedLogin = await ctx.callWorker("/v1/member/login", { phone: "07809876543", pin: "4826" });
   assert.equal(deletedLogin.status, 401);
+  assert.equal(ctx.credentials.has("m-002"), false);
 
   // 12. Audit logs recorded PIN_ISSUED, PIN_REVEALED, PIN_RESET, PIN_REVOKED
   const auditRes = await ctx.callWorker("/v1/admin/pin-audit-logs", {}, "valid-captain-token");

@@ -19,5 +19,5 @@ test('client defaults to stable issuance and makes reset explicit', () => {
 
 test('raw PIN is not persisted by the Worker contract', () => {
   assert.doesNotMatch(source, /INSERT INTO member_credentials[^\n]*pin\s*[,)]/i)
-  assert.match(source, /return json\(\{ pin \}/)
+  assert.match(source, /return json\(\{ memberId: identity\.memberId, membershipId: identity\.membershipId, phoneE164: identity\.phoneE164, pin/)
 })

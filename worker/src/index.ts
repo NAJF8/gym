@@ -458,6 +458,33 @@ async function readMember(env: Env, memberId: string) {
   return { member, appData, token };
 }
 
+function memberIdentity(member: Record<string, unknown>, memberId: string, phone: string) {
+  const membershipId = typeof member.membershipId === "string" && member.membershipId.trim()
+    ? member.membershipId.trim()
+    : memberId;
+  const firebaseUid = typeof member.authUid === "string" && member.authUid.trim()
+    ? member.authUid.trim()
+    : `member:${memberId}`;
+  return { memberId, membershipId, firebaseUid, phoneE164: phone };
+}
+
+async function assertCredentialIdentityAvailable(env: Env, identity: ReturnType<typeof memberIdentity>) {
+  const phoneOwner = await env.PIN_DB.prepare(
+    "SELECT member_id FROM member_credentials WHERE phone_e164 = ? AND member_id <> ?",
+  ).bind(identity.phoneE164, identity.memberId).first<{ member_id: string }>();
+  if (phoneOwner) throw new Error("PHONE_ALREADY_BOUND");
+  const identityOwner = await env.PIN_DB.prepare(
+    "SELECT member_id FROM member_credentials WHERE (firebase_uid = ? OR membership_id = ?) AND member_id <> ? LIMIT 1",
+  ).bind(identity.firebaseUid, identity.membershipId, identity.memberId).first<{ member_id: string }>();
+  if (identityOwner) throw new Error("CREDENTIAL_OWNER_CONFLICT");
+}
+
+async function alignCredentialIdentity(env: Env, identity: ReturnType<typeof memberIdentity>, now: number) {
+  await env.PIN_DB.prepare(
+    "UPDATE member_credentials SET firebase_uid = ?, membership_id = ?, phone_e164 = ?, updated_at = ? WHERE member_id = ?",
+  ).bind(identity.firebaseUid, identity.membershipId, identity.phoneE164, new Date(now).toISOString(), identity.memberId).run();
+}
+
 function publicMember(member: Record<string, unknown>, appData?: { courses?: Array<Record<string, unknown>>; exercises?: Array<Record<string, unknown>> }) {
   const safe = { ...member };
   delete safe.authUid;
@@ -560,39 +587,36 @@ async function issuePin(env: Env, request: Request) {
   const phone = normalizePhone(body.phone ?? storedPhone);
   if (phone !== storedPhone) throw new Error("MEMBER_PHONE_MISMATCH");
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
+  const identity = memberIdentity(member, body.memberId, phone);
+  await assertCredentialIdentityAvailable(env, identity);
   const pin = isPin(body.customPin) ? body.customPin : randomPin();
   const credential = await hashPin(pin);
   const pinCipher = await encryptPin(pin, pinCipherSecret(env), body.memberId);
   const now = Date.now();
-  const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
-  const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
-  const phoneOwner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ? AND member_id <> ?").bind(phone, body.memberId).first<{ member_id: string }>();
-  if (phoneOwner) throw new Error("PHONE_ALREADY_BOUND");
   const reset = body.reset === true;
-  const existing = await env.PIN_DB.prepare("SELECT status, credential_version, pin_cipher, phone_e164 FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; credential_version: number; pin_cipher?: string | null; phone_e164?: string }>();
+  const existing = await env.PIN_DB.prepare("SELECT status, credential_version, pin_cipher, phone_e164, firebase_uid, membership_id FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; credential_version: number; pin_cipher?: string | null; phone_e164?: string; firebase_uid?: string; membership_id?: string }>();
   if (existing?.status === "ACTIVE" && !reset) {
-    if (existing.phone_e164 && existing.phone_e164 !== phone) {
-      await env.PIN_DB.prepare("UPDATE member_credentials SET phone_e164 = ?, updated_at = ? WHERE member_id = ?").bind(phone, new Date(now).toISOString(), body.memberId).run();
-    }
-    return json({ pin: null, existing: true, hasCipher: Boolean(existing.pin_cipher), credentialVersion: existing.credential_version }, 200, cors(env, request.headers.get("origin") || ""));
+    if (existing.phone_e164 !== identity.phoneE164 || existing.firebase_uid !== identity.firebaseUid || existing.membership_id !== identity.membershipId)
+      await alignCredentialIdentity(env, identity, now);
+    return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: null, existing: true, hasCipher: Boolean(existing.pin_cipher), credentialVersion: existing.credential_version }, 200, cors(env, request.headers.get("origin") || ""));
   }
   const statement = "INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?)";
-  const values = [crypto.randomUUID(), body.memberId, firebaseUid, membershipId, phone, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()] as const;
+  const values = [crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()] as const;
   if (reset) {
-    await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO UPDATE SET phone_e164=excluded.phone_e164, membership_id=excluded.membership_id, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, pin_cipher=excluded.pin_cipher, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at`).bind(...values).run();
+    await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO UPDATE SET firebase_uid=excluded.firebase_uid, phone_e164=excluded.phone_e164, membership_id=excluded.membership_id, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, pin_cipher=excluded.pin_cipher, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at`).bind(...values).run();
     await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
     await recordPinAudit(env, "PIN_RESET", actorUid, body.memberId, (existing?.credential_version ?? 0) + 1);
   } else {
     const inserted = await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO NOTHING`).bind(...values).run();
     if (!inserted.meta?.changes) {
       const raced = await env.PIN_DB.prepare("SELECT credential_version, pin_cipher FROM member_credentials WHERE member_id = ? AND status = 'ACTIVE'").bind(body.memberId).first<{ credential_version: number; pin_cipher?: string | null }>();
-      return json({ pin: null, existing: true, hasCipher: Boolean(raced?.pin_cipher), credentialVersion: raced?.credential_version ?? 1 }, 200, cors(env, request.headers.get("origin") || ""));
+      return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: null, existing: true, hasCipher: Boolean(raced?.pin_cipher), credentialVersion: raced?.credential_version ?? 1 }, 200, cors(env, request.headers.get("origin") || ""));
     }
     await recordPinAudit(env, "PIN_ISSUED", actorUid, body.memberId, 1);
   }
   await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key IN (?, ?)").bind(`account:${body.memberId}`, `phone:${phone}`).run();
   await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key = ? OR (locked_until IS NOT NULL AND locked_until <= ?)").bind(`source:${requestSource(request)}`, now).run();
-  return json({ pin }, 200, cors(env, request.headers.get("origin") || ""));
+  return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function revealPin(env: Env, request: Request) {
@@ -603,26 +627,20 @@ async function revealPin(env: Env, request: Request) {
   if (member.active === false) throw new Error("MEMBER_INACTIVE");
   const storedPhone = normalizePhone(member.phoneE164 ?? member.phoneDisplay ?? member.phone);
   const now = Date.now();
-  const row = await env.PIN_DB.prepare("SELECT status, pin_cipher, pin_hash, pin_salt, credential_version, phone_e164 FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; pin_cipher: string | null; pin_hash: unknown; pin_salt: unknown; credential_version: number; phone_e164: string }>();
+  const identity = memberIdentity(member, body.memberId, storedPhone);
+  await assertCredentialIdentityAvailable(env, identity);
+  const row = await env.PIN_DB.prepare("SELECT status, pin_cipher, pin_hash, pin_salt, credential_version, phone_e164, firebase_uid, membership_id FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; pin_cipher: string | null; pin_hash: unknown; pin_salt: unknown; credential_version: number; phone_e164: string; firebase_uid?: string; membership_id?: string }>();
   if (!row) {
-    const phoneOwner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ? AND member_id <> ?").bind(storedPhone, body.memberId).first<{ member_id: string }>();
-    if (phoneOwner) throw new Error("PHONE_ALREADY_BOUND");
     const pin = randomPin();
     const credential = await hashPin(pin);
     const pinCipher = await encryptPin(pin, pinCipherSecret(env), body.memberId);
-    const firebaseUid = typeof member.authUid === "string" && member.authUid.trim() ? member.authUid : `member:${body.memberId}`;
-    const membershipId = typeof member.membershipId === "string" && member.membershipId.trim() ? member.membershipId : body.memberId;
-    await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO NOTHING").bind(crypto.randomUUID(), body.memberId, firebaseUid, membershipId, storedPhone, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
+    await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO NOTHING").bind(crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
     await recordPinAudit(env, "PIN_ISSUED", actorUid, body.memberId, 1);
     await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, 1);
-    return json({ pin, credentialVersion: 1, source: "issued" }, 200, cors(env, request.headers.get("origin") || ""));
+    return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin, credentialVersion: 1, source: "issued" }, 200, cors(env, request.headers.get("origin") || ""));
   }
-  if (row.phone_e164 !== storedPhone) {
-    const phoneOwner = await env.PIN_DB.prepare("SELECT member_id FROM member_credentials WHERE phone_e164 = ? AND member_id <> ?").bind(storedPhone, body.memberId).first<{ member_id: string }>();
-    if (!phoneOwner) {
-      await env.PIN_DB.prepare("UPDATE member_credentials SET phone_e164 = ?, updated_at = ? WHERE member_id = ?").bind(storedPhone, new Date(now).toISOString(), body.memberId).run();
-    }
-  }
+  if (row.phone_e164 !== identity.phoneE164 || row.firebase_uid !== identity.firebaseUid || row.membership_id !== identity.membershipId)
+    await alignCredentialIdentity(env, identity, now);
   if (row.status !== "ACTIVE") throw new Error("PIN_NOT_ACTIVE");
   if (!row.pin_cipher) {
     if (isPin(body.candidatePin)) {
@@ -631,7 +649,7 @@ async function revealPin(env: Env, request: Request) {
         const pinCipher = await encryptPin(body.candidatePin, pinCipherSecret(env), body.memberId);
         await env.PIN_DB.prepare("UPDATE member_credentials SET pin_cipher = ?, updated_at = ? WHERE member_id = ?").bind(pinCipher, new Date(now).toISOString(), body.memberId).run();
         await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, row.credential_version);
-        return json({ pin: body.candidatePin, credentialVersion: row.credential_version, source: "migrated" }, 200, cors(env, request.headers.get("origin") || ""));
+        return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: body.candidatePin, credentialVersion: row.credential_version, source: "migrated" }, 200, cors(env, request.headers.get("origin") || ""));
       }
     }
     const newPin = randomPin();
@@ -641,11 +659,11 @@ async function revealPin(env: Env, request: Request) {
     await env.PIN_DB.prepare("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, pin_cipher = ?, hash_algorithm = 'PBKDF2-SHA256', hash_iterations = ?, failure_count = 0, locked_until = NULL, credential_version = ?, updated_at = ?, last_pin_changed_at = ? WHERE member_id = ?").bind(credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, nextVersion, new Date(now).toISOString(), new Date(now).toISOString(), body.memberId).run();
     await recordPinAudit(env, "PIN_RESET", actorUid, body.memberId, nextVersion);
     await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, nextVersion);
-    return json({ pin: newPin, credentialVersion: nextVersion, source: "rotated_legacy" }, 200, cors(env, request.headers.get("origin") || ""));
+    return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: newPin, credentialVersion: nextVersion, source: "rotated_legacy" }, 200, cors(env, request.headers.get("origin") || ""));
   }
   const pin = await decryptPin(row.pin_cipher, pinCipherSecret(env), body.memberId);
   await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, row.credential_version);
-  return json({ pin, credentialVersion: row.credential_version, source: "revealed" }, 200, cors(env, request.headers.get("origin") || ""));
+  return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin, credentialVersion: row.credential_version, source: "revealed" }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
 async function pinAuditLogs(env: Env, request: Request) {
@@ -713,6 +731,10 @@ async function revokeMember(env: Env, request: Request) {
   await env.PIN_DB.prepare("UPDATE member_credentials SET status = 'DISABLED', credential_version = credential_version + 1, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), body.memberId).run();
   await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
   await recordPinAudit(env, "PIN_REVOKED", actorUid, body.memberId, null);
+  // A deleted member must not leave a reusable credential row behind. The
+  // audit record remains, but the PIN hash/cipher and credential owner are
+  // removed after sessions are revoked.
+  await env.PIN_DB.prepare("DELETE FROM member_credentials WHERE member_id = ?").bind(body.memberId).run();
   return json({ ok: true, access: "revoked" }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
@@ -742,7 +764,7 @@ export default {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
       const authStage = code.startsWith("AUTH_REQUIRED:") ? code.slice("AUTH_REQUIRED:".length) : "";
       const authRequired = code === "AUTH_REQUIRED" || Boolean(authStage);
-      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "IMAGE_UPLOAD_RATE_LIMITED" ? 429 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" || code === "GITHUB_BRANCH_PROTECTED" || code === "PIN_LEGACY_HASH_ONLY" || code === "PIN_NOT_ACTIVE" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
+      const status = authRequired || code === "SESSION_INVALID" ? 401 : code === "IMAGE_UPLOAD_RATE_LIMITED" ? 429 : code === "INVITATION_EXPIRED" ? 410 : code === "EXISTING_ADMIN_PROTECTED" || code === "SELF_INVITE_FORBIDDEN" || code === "PHONE_ALREADY_BOUND" || code === "CREDENTIAL_OWNER_CONFLICT" || code === "GITHUB_BRANCH_PROTECTED" || code === "PIN_LEGACY_HASH_ONLY" || code === "PIN_NOT_ACTIVE" ? 409 : code === "INVITATION_APPLY_RETRYABLE" ? 503 : code.endsWith("REQUIRED") || code === "ADMIN_REQUIRED" || code === "MEMBER_DELETED" || code === "MEMBER_INACTIVE" ? 403 : code === "MEMBER_NOT_FOUND" ? 404 : 400;
       const clientErrors: Record<string, string> = {
         GITHUB_UPLOAD_NOT_CONFIGURED: "رفع الصور غير مهيأ في هذه البيئة؛ لم يتم تغيير الصورة الحالية",
         GITHUB_BRANCH_PROTECTED: "الفرع محمي؛ لم يتم نشر الصورة",
@@ -753,6 +775,7 @@ export default {
         PIN_LEGACY_HASH_ONLY: "الرمز القديم محفوظ كـHash فقط؛ استخدم إعادة تعيين PIN لإصدار رمز جديد",
         PIN_NOT_ACTIVE: "رمز الدخول غير فعال لهذا المشترك؛ استخدم إعادة تعيين PIN",
         PHONE_ALREADY_BOUND: "رقم الهاتف مرتبط بمشترك آخر",
+        CREDENTIAL_OWNER_CONFLICT: "هوية الاعتماد مرتبطة بمشترك آخر؛ لم يتم تغيير PIN",
         MEMBER_INACTIVE: "العضوية غير فعالة حالياً؛ راجع إدارة الجيم",
         MEMBER_DELETED: "تم حذف العضوية ولا يمكن استخدامها",
         MEMBER_NOT_FOUND: "لم يتم العثور على العضوية المطلوبة",
