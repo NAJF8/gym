@@ -43,6 +43,17 @@ function cleanMember(member: Record<string, unknown>, version: number): StoredMe
   return { ...member, id: member.id, version } as StoredMember;
 }
 
+/**
+ * Build the exact record used by an atomic RTDB multi-location update.
+ * The version is derived from the authoritative baseline; a stale baseline
+ * is rejected by the RTDB rule instead of being silently overwritten.
+ */
+export function prepareMemberRecord(member: Record<string, unknown>, previous: unknown) {
+  if (!isValidMemberId(member.id)) throw new Error("MEMBER_ID_REQUIRED");
+  const expected = expectedVersion(previous);
+  return cleanMember(member, expected === 0 ? 1 : expected + 1);
+}
+
 export async function upsertMemberRecord(database: Database, member: Record<string, unknown>, previous: unknown) {
   if (!isValidMemberId(member.id)) throw new Error("MEMBER_ID_REQUIRED");
   const expected = expectedVersion(previous);
@@ -56,7 +67,7 @@ export async function upsertMemberRecord(database: Database, member: Record<stri
       // the server value is returned. Returning the proposed version lets the
       // server compare-and-rerun against an existing record; tombstone Rules
       // still make a post-delete resurrection impossible.
-      return cleanMember(member, expected === 0 ? 1 : expected + 1);
+      return prepareMemberRecord(member, previous);
     }
     if (!current || typeof current !== "object" || (current as { id?: unknown }).id !== member.id) return;
     const currentVersion = typeof (current as { version?: unknown }).version === "number"

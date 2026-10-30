@@ -14,12 +14,11 @@ test("invitation storage has a single-use state machine and audit table", () => 
   assert.match(helper, /status = 'APPLIED'.*claimed_uid/s);
 });
 
-test("production invitation migration preserves rows and supports invitation role values", () => {
-  assert.match(productionMigration, /INSERT INTO admin_invitations_v2/);
-  assert.match(productionMigration, /DROP TABLE admin_invitations/);
-  assert.match(productionMigration, /role IN \('COACH', 'MANAGER'\)/);
-  assert.match(productionMigration, /admin_invitations_live_email_idx/);
-  assert.match(productionMigration, /admin_audit_logs/);
+test("staging invitation migration reconciliation is non-destructive", () => {
+  assert.match(productionMigration, /historical migration names/);
+  assert.match(productionMigration, /SELECT 1;/);
+  assert.doesNotMatch(productionMigration, /INSERT INTO admin_invitations_v2/);
+  assert.doesNotMatch(productionMigration, /DROP TABLE admin_invitations/);
 });
 
 test("Worker acceptance uses verified identity and keyed member storage", () => {

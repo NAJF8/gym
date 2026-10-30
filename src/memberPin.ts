@@ -81,11 +81,13 @@ export async function revealMemberPin(memberId: string, candidatePin?: string) {
 export async function issueMemberPin(memberId: string, phone: string, membershipId = memberId, reset = false, customPin?: string) {
   const normalizedPhone = normalizeIraqiPhone(phone)
   const token = await requireFreshAdminToken()
-  const result = await request<{ pin: string | null; existing?: boolean; hasCipher?: boolean; credentialVersion?: number }>('/v1/admin/member-pin', {
+  const result = await request<{ memberId?: string; membershipId?: string; phoneE164?: string; pin: string | null; existing?: boolean; hasCipher?: boolean; credentialVersion?: number }>('/v1/admin/member-pin', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ memberId, membershipId, phone: normalizedPhone, reset, ...(customPin ? { customPin } : {}) }),
   })
+  if (result.memberId && result.memberId !== memberId) throw new Error('خدمة PIN أعادت هوية مشترك مختلفة؛ لم يتم اعتماد الرمز')
+  if (result.phoneE164 && result.phoneE164 !== normalizedPhone) throw new Error('خدمة PIN أعادت رقماً مختلفاً؛ لم يتم اعتماد الرمز')
   if (result.existing || result.pin === null) {
     if (result.hasCipher) return await revealMemberPin(memberId)
     throw new Error('يوجد PIN ثابت لهذا المشترك. استخدم إعادة تعيين PIN لإصدار رمز جديد؛ لا يمكن كشف الرمز القديم لأنه محفوظ كـHash فقط.')

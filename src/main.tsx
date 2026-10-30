@@ -172,6 +172,12 @@ type Exercise = {
   name: string;
   english?: string;
   muscle: string;
+  secondaryMuscles?: string[];
+  equipment?: string[];
+  steps?: string[];
+  safetyNotes?: string[];
+  commonMistakes?: string[];
+  anatomyView?: "front" | "back";
   sets: number | string;
   reps: string;
   rest: string;
@@ -278,7 +284,19 @@ function normalizeMuscle(value: unknown) {
   return muscleAliases[raw.toLowerCase()] || raw;
 }
 function normalizeExercise(exercise: Exercise): Exercise {
-  return { ...exercise, muscle: normalizeMuscle(exercise.muscle) };
+  const list = (value: unknown, limit = 12) => Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map(item => item.trim().slice(0, 240)).slice(0, limit)
+    : undefined;
+  return {
+    ...exercise,
+    muscle: normalizeMuscle(exercise.muscle),
+    ...(list(exercise.secondaryMuscles) ? { secondaryMuscles: list(exercise.secondaryMuscles) } : {}),
+    ...(list(exercise.equipment) ? { equipment: list(exercise.equipment) } : {}),
+    ...(list(exercise.steps, 20) ? { steps: list(exercise.steps, 20) } : {}),
+    ...(list(exercise.safetyNotes, 20) ? { safetyNotes: list(exercise.safetyNotes, 20) } : {}),
+    ...(list(exercise.commonMistakes, 20) ? { commonMistakes: list(exercise.commonMistakes, 20) } : {}),
+    ...(exercise.anatomyView === "back" ? { anatomyView: "back" as const } : exercise.anatomyView === "front" ? { anatomyView: "front" as const } : {}),
+  };
 }
 const seedExercises: Exercise[] = [
   {
@@ -480,6 +498,10 @@ const cloneDays = (days: unknown): DayPlan[] =>
               rest: String(exercise.rest ?? "—"),
             };
             if (typeof exercise.english === "string" && exercise.english) item.english = exercise.english;
+            for (const key of ["secondaryMuscles", "equipment", "steps", "safetyNotes", "commonMistakes"] as const) {
+              if (Array.isArray(exercise[key])) item[key] = exercise[key].filter((value): value is string => typeof value === "string" && value.trim().length > 0).map(value => value.trim());
+            }
+            if (exercise.anatomyView === "front" || exercise.anatomyView === "back") item.anatomyView = exercise.anatomyView;
             if (typeof exercise.video === "string" && exercise.video) item.video = exercise.video;
             if (typeof exercise.description === "string" && exercise.description) item.description = exercise.description;
             if (typeof exercise.image === "string" && exercise.image) item.image = exercise.image;
@@ -1998,8 +2020,27 @@ function ExerciseModal({
       : "none";
     if (e.description?.trim()) cleaned.description = e.description.trim();
     if (trimmedImage) cleaned.image = trimmedImage;
+    const list = (value?: string[]) => value?.map(item => item.trim()).filter(Boolean).slice(0, 20);
+    if (list(e.secondaryMuscles)?.length) cleaned.secondaryMuscles = list(e.secondaryMuscles);
+    if (list(e.equipment)?.length) cleaned.equipment = list(e.equipment);
+    if (list(e.steps)?.length) cleaned.steps = list(e.steps);
+    if (list(e.safetyNotes)?.length) cleaned.safetyNotes = list(e.safetyNotes);
+    if (list(e.commonMistakes)?.length) cleaned.commonMistakes = list(e.commonMistakes);
+    if (e.anatomyView) cleaned.anatomyView = e.anatomyView;
     onSave(cleaned);
   };
+  const listField = (key: "secondaryMuscles" | "equipment" | "steps" | "safetyNotes" | "commonMistakes", label: string, placeholder: string) => (
+    <label className="full-width-field">
+      {label}
+      <textarea
+        rows={3}
+        value={(e[key] || []).join("\n")}
+        onChange={(event) => setE({ ...e, [key]: event.target.value.split("\n").map(value => value.trim()).filter(Boolean).slice(0, 20) })}
+        placeholder={placeholder}
+      />
+      <small>سطر مستقل لكل معلومة؛ اتركه فارغاً إذا لم توجد بيانات موثوقة.</small>
+    </label>
+  );
   const availableMuscles = muscleList.includes(e.muscle) ? muscleList : [...muscleList, e.muscle];
   return (
     <Modal title={initial ? "تعديل التمرين" : "إضافة تمرين"} onClose={onClose}>
@@ -2022,6 +2063,18 @@ function ExerciseModal({
         {field("rest", "الراحة")}
         {field("image", "صورة التمرين (رابط HTTPS أو /assets/ اختياري)", "https://...")}
         {field("video", "رابط شرح الفيديو (YouTube / Vimeo اختياري)", "https://www.youtube.com/watch?v=...")}
+        <label>
+          منظر الرسم التشريحي
+          <select value={e.anatomyView || "front"} onChange={(event) => setE({ ...e, anatomyView: event.target.value as "front" | "back" })}>
+            <option value="front">أمامي</option>
+            <option value="back">خلفي</option>
+          </select>
+        </label>
+        {listField("secondaryMuscles", "العضلات الثانوية (اختياري)", "مثال: العضلة ثلاثية الرؤوس\nمثال: الكتف الأمامي")}
+        {listField("equipment", "الأدوات المطلوبة (اختياري)", "مثال: بار وأقراص\nمثال: مقعد مستوٍ")}
+        {listField("steps", "خطوات الأداء (اختياري)", "الخطوة الأولى\nالخطوة الثانية\nالخطوة الثالثة")}
+        {listField("safetyNotes", "ملاحظات السلامة (اختياري)", "مثال: حافظ على وضعية الظهر المحايدة")}
+        {listField("commonMistakes", "الأخطاء الشائعة (اختياري)", "مثال: استخدام سرعة عالية أو مدى حركة غير كامل")}
       </div>
       <div className="video-admin-status" aria-live="polite">
         {youtubeVideoId(e.video) ? <><CheckCircle2 size={17} /><span><b>رابط YouTube صالح</b><small>سيظهر كفيديو مضمّن في صفحة الشرح.</small></span></> : safeVideoUrl(e.video) ? <><CircleAlert size={17} /><span><b>الرابط مقبول لكن غير موثّق كفيديو YouTube</b><small>لا تستخدم رابط نتائج بحث أو رابطاً تخمينياً.</small></span></> : <><CircleAlert size={17} /><span><b>لم تتم إضافة فيديو موثّق</b><small>يمكن حفظ التمرين بدون فيديو، وستظهر حالة واضحة للمشترك.</small></span></>}
@@ -2252,8 +2305,8 @@ function Barcodes({
               </div>
               <div className="barcode-detail-heading"><div><span className="section-kicker">تفاصيل التمرين</span><h2>{selected.name}</h2><p>{selected.muscle}{selected.english ? ` · ${selected.english}` : ""}</p></div><span className="availability-badge">{selectedVideoVerified ? "فيديو متحقق" : selectedVideoId ? "يحتاج مراجعة" : "بدون فيديو"}</span></div>
               {selected.description && <p className="barcode-description">{selected.description}</p>}
-              {selectedVideoEmbed && previewVideo && <div className="barcode-video-preview"><iframe title={`معاينة فيديو ${selected.name}`} src={selectedVideoEmbed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>}
-              {selectedVideoId && <div className="barcode-video-actions"><button className="secondary-btn" type="button" onClick={() => setPreviewVideo((value) => !value)}><Play size={15}/>{previewVideo ? "إخفاء المعاينة" : "معاينة الفيديو"}</button><a className="text-btn" href={selectedVideo || "#"} target="_blank" rel="noreferrer"><ExternalLink size={14}/> فتح YouTube</a></div>}
+              {showBarcodes && selectedVideoEmbed && previewVideo && <div className="barcode-video-preview"><iframe title={`معاينة فيديو ${selected.name}`} src={selectedVideoEmbed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>}
+              {showBarcodes && selectedVideoId && <div className="barcode-video-actions"><button className="secondary-btn" type="button" onClick={() => setPreviewVideo((value) => !value)}><Play size={15}/>{previewVideo ? "إخفاء المعاينة" : "معاينة الفيديو"}</button><a className="text-btn" href={selectedVideo || "#"} target="_blank" rel="noreferrer"><ExternalLink size={14}/> فتح YouTube</a></div>}
                {showBarcodes ? <div className="qr-box">
                  <QRCodeSVG value={url} size={180} includeMargin level="M" />
                </div> : <p className="qr-disabled-note" role="status">عرض الباركودات متوقف من إعدادات النظام. ما زال رابط التمرين متاحاً.</p>}
@@ -3655,7 +3708,7 @@ function MemberPortal({
                     {e.image && <img className="member-exercise-image" src={e.image} alt={`صورة توضيحية لـ ${e.name}`} loading="lazy" />}
                     {(e.description || e.notes) && <p className="member-exercise-note">{e.notes && <b>ملاحظة: </b>}{e.notes || e.description}</p>}
                     <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /></div>
-                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {videoId ? "مشاهدة شرح التمرين" : "فتح بطاقة التمرين"}</a>{s.showBarcodes && <a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a>}</div>
+                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {s.showBarcodes && videoId && e.videoReviewStatus === "verified" ? "مشاهدة شرح التمرين" : "فتح تفاصيل التمرين"}</a>{s.showBarcodes && <a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a>}</div>
                   </article>;
                   };
                   if (block.kind === "superset") return <section className="member-superset-card" key={block.id}><header><Layers3 size={18} /><strong>سوبر تمرين {blockIndex + 1}</strong><span>{block.items.length} تمارين مترابطة</span></header><div className="member-superset-items">{block.items.map((exercise, index) => <div className="member-superset-item" key={`${exerciseInstanceKey(exercise)}-${index}`}>{renderExercise(exercise, index)}{index < block.items.length - 1 && <div className="superset-plus" aria-hidden="true">+</div>}</div>)}</div></section>;
@@ -3703,6 +3756,63 @@ function InstagramMark() {
 function WhatsAppMark() {
   return <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.7 7.4L3.5 20l1.1-4.1A8.5 8.5 0 1 1 20.5 11.5Z" /><path d="M8.5 8.7c.2-.4.4-.4.7-.4h.5c.2 0 .4.1.5.4l.7 1.5c.1.2.1.4-.1.6l-.5.6c.5 1 1.3 1.8 2.4 2.3l.6-.5c.2-.2.4-.2.6-.1l1.5.7c.3.1.4.3.4.5v.5c0 .3-.1.5-.4.7-.4.3-1.2.4-2 .1-2.2-.7-4.4-2.7-5.3-4.5-.3-.7-.2-1.5.1-1.9Z" /></svg>;
 }
+
+type ExerciseMuscleRegion = "abs" | "back" | "biceps" | "calves" | "chest" | "legs" | "other" | "shoulders" | "triceps";
+function exerciseMuscleRegion(value: string): ExerciseMuscleRegion {
+  const muscle = normalizeMuscle(value).toLowerCase();
+  if (muscle.includes("ظهر") || muscle.includes("back")) return "back";
+  if (muscle.includes("صدر") || muscle.includes("chest")) return "chest";
+  if (muscle.includes("كتف") || muscle.includes("shoulder")) return "shoulders";
+  if (muscle.includes("بايسبس") || muscle.includes("biceps")) return "biceps";
+  if (muscle.includes("ترايسبس") || muscle.includes("triceps")) return "triceps";
+  if (muscle.includes("بطن") || muscle.includes("abs")) return "abs";
+  if (muscle.includes("رجل") || muscle.includes("أرجل") || muscle.includes("leg")) return "legs";
+  if (muscle.includes("سمان") || muscle.includes("calf")) return "calves";
+  return "other";
+}
+
+function ExerciseAnatomy({ exercise }: { exercise: Exercise }) {
+  const primary = exerciseMuscleRegion(exercise.muscle);
+  const secondary = new Set((exercise.secondaryMuscles || []).map(exerciseMuscleRegion));
+  const tone = (region: ExerciseMuscleRegion) => region === primary ? "primary" : secondary.has(region) ? "secondary" : "neutral";
+  const view = exercise.anatomyView || (primary === "back" ? "back" : "front");
+  const viewLabel = view === "back" ? "الخلفي" : "الأمامي";
+  return <div className="exercise-anatomy-card">
+    <div className="exercise-anatomy-heading"><div><span className="section-kicker">خريطة العضلات</span><h2>المنظر {viewLabel}</h2></div><span className="anatomy-legend"><i className="anatomy-dot primary" /> أساسية <i className="anatomy-dot secondary" /> ثانوية</span></div>
+    <svg className="exercise-anatomy-svg" viewBox="0 0 220 300" role="img" aria-label={`رسم تشريحي مبسط للعضلات المستهدفة في ${exercise.name}`}>
+      <circle className="anatomy-part neutral" cx="110" cy="30" r="20" />
+      <path className={`anatomy-part ${tone("shoulders")}`} d="M83 58 Q110 47 137 58 L151 78 L134 92 L127 77 L93 77 L86 92 L69 78 Z" />
+      <path className={`anatomy-part ${tone("chest")}`} d="M88 70 Q110 61 132 70 L128 105 Q110 113 92 105 Z" />
+      <path className={`anatomy-part ${tone("abs")}`} d="M94 105 L126 105 L130 151 L90 151 Z" />
+      <path className={`anatomy-part ${tone("biceps")}`} d="M69 78 L84 88 L73 130 L58 125 Z M151 78 L136 88 L147 130 L162 125 Z" />
+      <path className={`anatomy-part ${tone("triceps")}`} d="M69 78 L58 86 L47 126 L58 130 L73 91 Z M151 78 L162 86 L173 126 L162 130 L147 91 Z" />
+      {view === "back" && <path className={`anatomy-part ${tone("back")}`} d="M92 70 Q110 61 128 70 L126 150 L94 150 Z" />}
+      <path className={`anatomy-part ${tone("legs")}`} d="M90 151 L109 151 L106 238 L84 238 Z M111 151 L130 151 L136 238 L114 238 Z" />
+      <path className={`anatomy-part ${tone("calves")}`} d="M84 238 L106 238 L101 276 L80 276 Z M114 238 L136 238 L141 276 L120 276 Z" />
+    </svg>
+    <p className="anatomy-source-note">الرسم توضيحي فقط؛ التلوين يعتمد على بيانات العضلة المحفوظة للتمرين ولا يستبدل إرشاد المدرب أو المختص.</p>
+  </div>;
+}
+
+function ExerciseDetailFacts({ exercise }: { exercise: Exercise }) {
+  const secondary = exercise.secondaryMuscles?.filter(Boolean) || [];
+  const equipment = exercise.equipment?.filter(Boolean) || [];
+  return <div className="exercise-detail-facts">
+    <div><span>العضلة الأساسية</span><strong>{exercise.muscle || "غير متوفر"}</strong></div>
+    <div><span>العضلات الثانوية</span><strong>{secondary.length ? secondary.join("، ") : "غير متوفر في السجل"}</strong></div>
+    <div><span>الأدوات المطلوبة</span><strong>{equipment.length ? equipment.join("، ") : "غير متوفر في السجل"}</strong></div>
+  </div>;
+}
+
+function ExerciseDetailLists({ exercise }: { exercise: Exercise }) {
+  const section = (title: string, values?: string[]) => values?.length ? <div className="exercise-detail-list"><h2>{title}</h2><ol>{values.map((value, index) => <li key={`${title}-${index}`}>{value}</li>)}</ol></div> : <div className="exercise-detail-list unavailable"><h2>{title}</h2><p>لا توجد بيانات موثوقة محفوظة لهذا التمرين.</p></div>;
+  return <div className="exercise-detail-lists">
+    {section("خطوات الأداء", exercise.steps)}
+    {section("ملاحظات السلامة", exercise.safetyNotes)}
+    {section("الأخطاء الشائعة", exercise.commonMistakes)}
+  </div>;
+}
+
 function ExerciseDetail({
   s,
   exercise,
@@ -3729,22 +3839,10 @@ function ExerciseDetail({
               <span>
                 التكرارات<strong>{exercise.reps}</strong>
               </span>
-              <span>
-                الراحة<strong>{exercise.rest}</strong>
-              </span>
             </div>
-            {video ? (
-              <a
-                className="primary-btn"
-                href={video}
-                target="_blank"
-                rel="noreferrer"
-              >
-                فتح فيديو الشرح <ExternalLink size={15} />
-              </a>
-            ) : (
-              <span className="availability-badge">الشرح النصي متوفر أعلاه</span>
-            )}
+            <ExerciseDetailFacts exercise={exercise} />
+            <ExerciseAnatomy exercise={exercise} />
+            <ExerciseDetailLists exercise={exercise} />
           </>
         ) : (
           <Empty
@@ -3770,6 +3868,8 @@ function PublicExerciseDetail({
     suggestedExercises.find((e) => e.id === exerciseId);
   const [exercise, setExercise] = useState<Exercise | undefined>(defaultFallback);
   const [loading, setLoading] = useState(!defaultFallback);
+  const [showBarcodes, setShowBarcodes] = useState(false);
+  const [settingsReady, setSettingsReady] = useState(!firebaseConfigured);
   useEffect(
     () =>
       watchPublicExercise<Exercise>(exerciseId, (value) => {
@@ -3778,19 +3878,30 @@ function PublicExerciseDetail({
       }),
     [exerciseId],
   );
+  useEffect(() => watchPublicSettings<{ showBarcodes?: unknown }>((value) => {
+    setShowBarcodes(typeof value?.showBarcodes === "boolean" ? value.showBarcodes : true);
+    setSettingsReady(true);
+  }, () => {
+    setShowBarcodes(false);
+    setSettingsReady(true);
+  }), []);
   const video = safeVideoUrl(exercise?.video);
-  const embed = exercise?.videoReviewStatus === "verified" ? youtubeEmbedUrl(video) : null;
+  const trustedVideo = settingsReady && showBarcodes && exercise?.videoReviewStatus === "verified" && youtubeVideoId(video) ? video : null;
+  const embed = trustedVideo ? youtubeEmbedUrl(trustedVideo) : null;
   return (
     <main className="exercise-detail-page" dir="rtl">
       <header className="public-exercise-header"><Logo s={defaults} /><a className="public-login-link" href={window.location.origin + window.location.pathname}>دخول المشترك <ArrowLeft size={15} /></a></header>
       <section className="panel exercise-detail-card">
         {exercise ? (
           <>
-            <div className="exercise-detail-intro"><div className="exercise-detail-icon">{exercise.image ? <img src={exercise.image} alt={`صورة توضيحية لـ ${exercise.name}`} /> : <Dumbbell size={32} />}</div><div><span className="section-kicker">شرح التمرين</span><h1>{exercise.name}</h1><p className="exercise-muscle-label">{exercise.muscle}{exercise.english ? ` · ${exercise.english}` : ""}</p></div></div>
-            {embed ? <div className="exercise-video-frame"><iframe title={`فيديو شرح ${exercise.name}`} src={embed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> : <div className="exercise-video-unavailable" role="status"><CircleAlert size={20} /><div><strong>لا يوجد فيديو موثّق لهذا التمرين حالياً</strong><span>نعرض البيانات العامة فقط حتى تتم مراجعة رابط موثوق من الكابتن.</span></div></div>}
-            {exercise.description && <div className="exercise-instructions"><h2>تعليمات الأداء</h2><p>{exercise.description}</p></div>}
-            <div className="detail-grid"><span>المجموعات<strong>{exercise.sets}</strong></span><span>التكرارات<strong>{exercise.reps}</strong></span><span>الراحة<strong>{exercise.rest}</strong></span></div>
-            <div className="exercise-detail-actions">{video && <a className="primary-btn" href={video} target="_blank" rel="noreferrer"><ExternalLink size={15} /> المشاهدة على YouTube</a>}<button className="secondary-btn" onClick={() => window.history.length > 1 ? window.history.back() : window.location.assign(window.location.origin + window.location.pathname)}>العودة إلى الدخول <ArrowRight size={15} /></button></div>
+             <div className="exercise-detail-intro"><div className="exercise-detail-icon">{exercise.image ? <img src={exercise.image} alt={`صورة توضيحية لـ ${exercise.name}`} /> : <div className="exercise-image-missing" role="img" aria-label="لا توجد صورة موثوقة للتمرين"><Dumbbell size={32} /><span>الصورة غير متوفرة</span></div>}</div><div><span className="section-kicker">تفاصيل التمرين</span><h1>{exercise.name}</h1><p className="exercise-muscle-label">{exercise.english || "الاسم الإنجليزي غير متوفر"}</p></div></div>
+             {embed ? <div className="exercise-video-frame"><iframe title={`فيديو شرح ${exercise.name}`} src={embed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> : <div className="exercise-image-first-panel" role="status"><strong>{settingsReady && showBarcodes ? "لا يوجد فيديو YouTube موثّق" : "الفيديو مخفي حسب إعدادات العرض"}</strong><span>تظهر الصورة التوضيحية والعضلات والخطوات المتاحة من السجل بدلاً من قسم الفيديو.</span></div>}
+             {exercise.description && <div className="exercise-instructions"><h2>شرح مختصر لطريقة الأداء</h2><p>{exercise.description}</p></div>}
+             <div className="detail-grid"><span>المجموعات<strong>{exercise.sets}</strong></span><span>التكرارات<strong>{exercise.reps}</strong></span></div>
+             <ExerciseDetailFacts exercise={exercise} />
+             <ExerciseAnatomy exercise={exercise} />
+             <ExerciseDetailLists exercise={exercise} />
+             <div className="exercise-detail-actions">{trustedVideo && <a className="primary-btn" href={trustedVideo} target="_blank" rel="noreferrer"><ExternalLink size={15} /> المشاهدة على YouTube</a>}<button className="secondary-btn" onClick={() => window.history.length > 1 ? window.history.back() : window.location.assign(window.location.origin + window.location.pathname)}>العودة إلى الدخول <ArrowRight size={15} /></button></div>
           </>
         ) : loading ? (
           <p>جارٍ تحميل بيانات التمرين…</p>
