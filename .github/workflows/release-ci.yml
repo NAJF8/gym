@@ -2,7 +2,10 @@ name: AL ASAS FIT Release CI
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - codex/al-asas-fit-full-repair-20261022
+      - codex/fit-invitations-cors-clean-20261030
   push:
     branches: [codex/al-asas-fit-final-release]
 
@@ -26,8 +29,11 @@ jobs:
       - run: npm run test:pin
       - run: npm run test:video
       - run: npm run test:invites
-      - run: npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
-      - run: npx -y wrangler@latest deploy --dry-run --config worker/wrangler.toml
+      # PR37 adds the repository security-boundary contract; keep PR36 CI compatible.
+      - run: npm run test:security --if-present
+      - run: npm run test:members
+      - run: npx --yes firebase-tools@15.34.2 emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
+      - run: npx --yes wrangler@4.156.0 deploy --dry-run --config worker/wrangler.toml
       - run: npm audit --omit=dev --audit-level=high
 
   build-staging:
