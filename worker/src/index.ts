@@ -376,9 +376,16 @@ async function adminManagement(env: Env, request: Request, action: string) {
   const idToken = bearerToken(request);
   if (action === 'list') {
     const admins = idToken ? await firebaseGetWithIdToken(env, 'admins', idToken) as Record<string, Record<string, unknown>> | null : null;
-    const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt, updatedAt: value.updatedAt, updatedBy: value.updatedBy })).filter(row => row.role === 'COACH' || row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
-    const invites = await env.PIN_DB.prepare("SELECT invitation_id AS invitationId, email, display_name AS displayName, role, status, created_at AS createdAt FROM admin_invitations WHERE status IN ('PENDING', 'CLAIMED') AND expires_at > ? ORDER BY created_at DESC").bind(Date.now()).all() as { results?: Array<Record<string, unknown>> };
-    for (const invite of invites.results || []) rows.push({ invitationId: invite.invitationId, email: String(invite.email || ''), displayName: String(invite.displayName || ''), role: invite.role, active: false, status: 'PENDING', createdAt: invite.createdAt });
+    const rows: Array<Record<string, unknown>> = Object.entries(admins || {}).map(([uid, value]) => ({ uid, invitationId: typeof value.invitationId === 'string' ? value.invitationId : undefined, email: String(value.email || ''), displayName: typeof value.displayName === 'string' ? value.displayName : '', role: value.role, active: value.active === true, status: value.active === true ? 'ACTIVE' : 'DISABLED', createdAt: value.createdAt, lastLoginAt: value.lastLoginAt, updatedAt: value.updatedAt, updatedBy: value.updatedBy })).filter(row => row.role === 'COACH' || row.role === 'MANAGER' || row.role === 'SUPER_ADMIN');
+    // Keep invitation history visible. The previous live-only query made
+    // accepted, revoked, and expired invitations disappear from Team & Access
+    // and left no safe way to re-issue one from the UI.
+    const invites = await env.PIN_DB.prepare("SELECT invitation_id AS invitationId, email, display_name AS displayName, role, status, created_at AS createdAt, expires_at AS expiresAt, claimed_at AS claimedAt, applied_at AS appliedAt FROM admin_invitations ORDER BY created_at DESC LIMIT 200").all() as { results?: Array<Record<string, unknown>> };
+    const now = Date.now();
+    for (const invite of invites.results || []) {
+      const expired = ['PENDING', 'CLAIMED'].includes(String(invite.status)) && Number(invite.expiresAt || 0) <= now;
+      rows.push({ invitationId: invite.invitationId, email: String(invite.email || ''), displayName: String(invite.displayName || ''), role: invite.role, active: false, status: expired ? 'EXPIRED' : invite.status, createdAt: invite.createdAt, expiresAt: invite.expiresAt, claimedAt: invite.claimedAt, appliedAt: invite.appliedAt });
+    }
     return json({ admins: rows }, 200, cors(env, request.headers.get('origin') || ''));
   }
   if (action === 'invite') {

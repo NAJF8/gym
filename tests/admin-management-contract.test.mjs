@@ -58,6 +58,14 @@ test("invitation cancellation is exact-match, pending-only, audited, and idempot
   assert.match(invitations, /idempotent: true/);
 });
 
+test("Team & Access retains invitation history and invitation identity for re-issue", () => {
+  assert.match(worker, /SELECT invitation_id AS invitationId, email, display_name AS displayName, role, status, created_at AS createdAt, expires_at AS expiresAt, claimed_at AS claimedAt, applied_at AS appliedAt FROM admin_invitations/);
+  assert.match(worker, /invitationId: typeof value\.invitationId === 'string' \? value\.invitationId/);
+  assert.match(managementClient, /'REVOKED' \| 'EXPIRED'/);
+  assert.match(ui, /إلغاء الدعوة/);
+  assert.match(ui, /إعادة الدعوة/);
+});
+
 test("worker errors expose a safe reason and never echo internal error codes", () => {
   assert.match(worker, /const clientErrors: Record<string, string>/);
   assert.match(worker, /body\.reason = code/);

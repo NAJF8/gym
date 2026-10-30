@@ -43,7 +43,10 @@ export async function signInAdmin() {
   try {
     return await signInWithPopup(firebaseAuth, adminGoogleProvider)
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user')) {
+    // Closing a user-initiated popup is a deliberate cancellation. Only a
+    // browser-blocked popup gets the redirect fallback; redirecting after a
+    // close creates an unexpected navigation loop and hides the real action.
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-blocked') {
       return signInWithRedirect(firebaseAuth, adminGoogleProvider)
     }
     throw error
