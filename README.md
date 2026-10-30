@@ -59,7 +59,7 @@ npm run dev
 ### تشغيل Emulator محلياً
 
 ```bash
-npx -y firebase-tools@latest emulators:start --only auth,database,functions --project demo-gym --config firebase.json
+npx --yes firebase-tools@15.34.2 emulators:start --only auth,database --project demo-gym --config firebase.json
 npm run test:rules
 ```
 

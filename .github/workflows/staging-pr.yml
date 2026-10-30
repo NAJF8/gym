@@ -23,7 +23,7 @@ jobs:
           java-version: '21'
       - run: npm ci
       - run: npm run test:pin && npm run test:video && npm run test:phone
-      - run: npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:members && npm run test:rules"
+      - run: npx --yes firebase-tools@15.34.2 emulators:exec --only database --project demo-gym --non-interactive "npm run test:members && npm run test:rules"
       - name: Build Staging bundle
         env:
           VITE_BASE_PATH: /
@@ -39,4 +39,4 @@ jobs:
           VITE_PIN_SERVICE_ENDPOINT: ${{ vars.VITE_PIN_SERVICE_ENDPOINT }}
         run: npm run build:staging
       - name: Compile Staging PIN Worker
-        run: npx -y wrangler@latest deploy --dry-run --config worker/wrangler.toml
+        run: npx --yes wrangler@4.156.0 deploy --dry-run --config worker/wrangler.toml

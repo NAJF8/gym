@@ -2,6 +2,8 @@
 // Staging credentials already use this value; keep the algorithm and salt format unchanged.
 const PBKDF2_ITERATIONS = 100_000;
 const HASH_BYTES = 32;
+const PIN_HASH_DOMAIN = "alasas-pin-hash-v2:";
+const PIN_HASH_ALGORITHM = "PBKDF2-SHA256-HMAC";
 
 export function normalizePhone(value: unknown) {
   let phone = typeof value === "string"
@@ -42,15 +44,31 @@ export function randomPin() {
   return String(values[0] % 10000).padStart(4, "0");
 }
 
-export async function derivePin(pin: string, salt: Uint8Array) {
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+async function pinInput(pin: string, pepper?: string) {
+  if (!pepper) return new TextEncoder().encode(pin);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(pepper),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${PIN_HASH_DOMAIN}${pin}`),
+  ));
+}
+
+export async function derivePin(pin: string, salt: Uint8Array, pepper?: string) {
+  const material = await crypto.subtle.importKey("raw", await pinInput(pin, pepper), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" }, material, HASH_BYTES * 8);
   return new Uint8Array(bits);
 }
 
-export async function hashPin(pin: string) {
+export async function hashPin(pin: string, pepper?: string) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  return { salt: bytesToBase64(salt), hash: bytesToBase64(await derivePin(pin, salt)) };
+  return { salt: bytesToBase64(salt), hash: bytesToBase64(await derivePin(pin, salt, pepper)) };
 }
 
 export function constantTimeEqual(a: Uint8Array, b: Uint8Array) {
@@ -98,4 +116,4 @@ export async function decryptPin(envelope: string, secret: string, memberId: str
   return decoded;
 }
 
-export { PBKDF2_ITERATIONS };
+export { PBKDF2_ITERATIONS, PIN_HASH_ALGORITHM };

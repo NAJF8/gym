@@ -28,9 +28,9 @@ jobs:
           java-version: '21'
       - run: npm ci
       - name: Run release security tests
-        run: npm run test:pin && npm run test:video && npm run test:invites && npx -y firebase-tools@latest emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
+        run: npm run test:pin && npm run test:video && npm run test:invites && npx --yes firebase-tools@15.34.2 emulators:exec --only database --project demo-gym --non-interactive "npm run test:rules"
       - name: Compile Production Worker contract
-        run: npx -y wrangler@latest deploy --dry-run --config worker/wrangler.production.toml
+        run: npx --yes wrangler@4.156.0 deploy --dry-run --config worker/wrangler.production.toml
       - name: Build production bundle
         env:
           VITE_BASE_PATH: /

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS member_credentials (
   phone_e164 TEXT NOT NULL UNIQUE,
   pin_hash BLOB NOT NULL,
   pin_salt BLOB NOT NULL,
-  hash_algorithm TEXT NOT NULL DEFAULT 'PBKDF2-SHA256',
+  hash_algorithm TEXT NOT NULL DEFAULT 'PBKDF2-SHA256-HMAC',
   hash_iterations INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'DISABLED')),
   failure_count INTEGER NOT NULL DEFAULT 0,

@@ -43,7 +43,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS admin_invitations_live_email_idx
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
   audit_id TEXT PRIMARY KEY,
-  action TEXT,
+  action TEXT NOT NULL,
   invitation_id TEXT,
   actor_uid TEXT,
   target_uid TEXT,

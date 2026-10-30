@@ -425,6 +425,7 @@ const defaults: SettingsData = {
   printFooterNote: "نتمنى لكم تمريناً آمناً ونتائج مستمرة.",
 };
 const read = <T,>(key: string, fallback: T): T => {
+  if (firebaseConfigured) return fallback;
   try {
     const value = localStorage.getItem(key);
     return value ? JSON.parse(value) : fallback;
@@ -1133,7 +1134,12 @@ function CentralDataBridge({
     setBusy(true);
     setError("");
     try {
-      const backup = backupLocalSnapshot(localPayload);
+      const backupPayload = {
+        ...localPayload,
+        members: [],
+        settings: { ...localPayload.settings, phone: "", whatsapp: "", address: "" },
+      };
+      const backup = backupLocalSnapshot(backupPayload);
       setBackupKey(backup);
       await writeAdminData({
         ...payload,
@@ -1206,22 +1212,27 @@ function App({
   const courseId = currentHash.startsWith("#/course/")
     ? decodeURIComponent(currentHash.slice(9))
     : "";
-  useEffect(
-    () => localStorage.setItem("alasas-settings", JSON.stringify(settings)),
-    [settings],
-  );
-  useEffect(
-    () => localStorage.setItem("alasas-exercises", JSON.stringify(exercises)),
-    [exercises],
-  );
-  useEffect(
-    () => localStorage.setItem("alasas-courses", JSON.stringify(courses)),
-    [courses],
-  );
-  useEffect(
-    () => localStorage.setItem("alasas-categories", JSON.stringify(categories)),
-    [categories],
-  );
+  useEffect(() => {
+    if (firebaseConfigured) {
+      for (const key of ["alasas-settings", "alasas-exercises", "alasas-courses", "alasas-categories"]) {
+        try { localStorage.removeItem(key); } catch { /* storage may be unavailable */ }
+      }
+      return;
+    }
+    try { localStorage.setItem("alasas-settings", JSON.stringify(settings)); } catch { /* best-effort preview cache */ }
+  }, [settings]);
+  useEffect(() => {
+    if (firebaseConfigured) return;
+    try { localStorage.setItem("alasas-exercises", JSON.stringify(exercises)); } catch { /* best-effort preview cache */ }
+  }, [exercises]);
+  useEffect(() => {
+    if (firebaseConfigured) return;
+    try { localStorage.setItem("alasas-courses", JSON.stringify(courses)); } catch { /* best-effort preview cache */ }
+  }, [courses]);
+  useEffect(() => {
+    if (firebaseConfigured) return;
+    try { localStorage.setItem("alasas-categories", JSON.stringify(categories)); } catch { /* best-effort preview cache */ }
+  }, [categories]);
   const muscleNames = categories.length ? categories.map((c) => c.name) : muscles;
   const title = {
     home: "الرئيسية",
