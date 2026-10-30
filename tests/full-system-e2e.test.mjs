@@ -72,7 +72,7 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                 return { meta: { changes: 1 } };
               }
               if (sql.startsWith("INSERT INTO member_credentials") && sql.includes("DO NOTHING")) {
-                const [credentialId, memberId, firebaseUid, membershipId, phone, hash, salt, pinCipher, iterations, createdAt, updatedAt, changedAt] = args;
+                const [credentialId, memberId, firebaseUid, membershipId, phone, hash, salt, pinCipher, hashAlgorithm, iterations, createdAt, updatedAt, changedAt] = args;
                 if (credentials.has(memberId)) return { meta: { changes: 0 } };
                 credentials.set(memberId, {
                   credential_id: credentialId,
@@ -83,7 +83,7 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                   pin_hash: hash,
                   pin_salt: salt,
                   pin_cipher: pinCipher,
-                  hash_algorithm: "PBKDF2-SHA256",
+                  hash_algorithm: hashAlgorithm,
                   hash_iterations: iterations,
                   status: "ACTIVE",
                   failure_count: 0,
@@ -96,7 +96,7 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                 return { meta: { changes: 1 } };
               }
               if (sql.startsWith("INSERT INTO member_credentials") && sql.includes("DO UPDATE SET")) {
-                const [credentialId, memberId, firebaseUid, membershipId, phone, hash, salt, pinCipher, iterations, createdAt, updatedAt, changedAt] = args;
+                const [credentialId, memberId, firebaseUid, membershipId, phone, hash, salt, pinCipher, hashAlgorithm, iterations, createdAt, updatedAt, changedAt] = args;
                 const prev = credentials.get(memberId);
                 credentials.set(memberId, {
                   credential_id: prev?.credential_id || credentialId,
@@ -107,7 +107,7 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                   pin_hash: hash,
                   pin_salt: salt,
                   pin_cipher: pinCipher,
-                  hash_algorithm: "PBKDF2-SHA256",
+                  hash_algorithm: hashAlgorithm,
                   hash_iterations: iterations,
                   status: "ACTIVE",
                   failure_count: 0,
@@ -120,12 +120,13 @@ function createTestEnv(initialMembers = {}, initialDeleted = {}) {
                 return { meta: { changes: 1 } };
               }
               if (sql.startsWith("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, pin_cipher = ?")) {
-                const [hash, salt, pinCipher, iterations, nextVersion, updatedAt, changedAt, memberId] = args;
+                const [hash, salt, pinCipher, hashAlgorithm, iterations, nextVersion, updatedAt, changedAt, memberId] = args;
                 const row = credentials.get(memberId);
                 if (row) {
                   row.pin_hash = hash;
                   row.pin_salt = salt;
                   row.pin_cipher = pinCipher;
+                  row.hash_algorithm = hashAlgorithm;
                   row.hash_iterations = iterations;
                   row.failure_count = 0;
                   row.locked_until = null;

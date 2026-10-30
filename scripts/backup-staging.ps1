@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Path $target -Force | Out-Null
 # firebase-tools --json emits the RTDB value followed by a separate status JSON
 # object. Capture stdout as text, extract exactly the first JSON value, and
 # reject anything that is not a complete object before writing the backup.
-$raw = (& npx -y firebase-tools@latest database:get / --project $project --json 2>&1 | Out-String)
+$raw = (& npx --yes firebase-tools@15.34.2 database:get / --project $project --json 2>&1 | Out-String)
 $statusStart = $raw.IndexOf("`n{`r`n  `"status`"")
 if ($statusStart -lt 0) { $statusStart = $raw.IndexOf("`n{`n  `"status`"") }
 if ($statusStart -lt 0) {

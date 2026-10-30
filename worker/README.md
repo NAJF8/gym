@@ -2,7 +2,7 @@
 
 This Worker is the only PIN authority. It issues a cryptographically random
 four-digit code once per member, stores only a salted PBKDF2-SHA-256 derivation
-in D1, resets failed attempts on success, and locks a phone after five failed
+of a Worker-held HMAC secret in D1, resets failed attempts on success, and locks a phone after five failed
 attempts for 15 minutes. Repeated issuance requests are idempotent and do not
 change an existing PIN. A new raw PIN is generated only for first issuance or
 an explicit reset request; it is returned only from that authenticated request
@@ -15,6 +15,11 @@ it and requires an explicit reset to issue a new one.
 
 Required Worker secrets/variables:
 
+- `PIN_PEPPER` — a high-entropy, Staging-only Worker secret used by the
+  versioned `PBKDF2-SHA256-HMAC` PIN hash. Existing legacy hashes can still
+  authenticate and are upgraded after a successful login when this secret is
+  configured. New issuance and reset fail closed if neither `PIN_PEPPER` nor
+  the compatibility `PIN_ENCRYPTION_KEY` is present.
 - FIREBASE_DATABASE_URL
 - FIREBASE_WEB_API_KEY
 - FIREBASE_SERVICE_ACCOUNT_EMAIL
@@ -38,4 +43,8 @@ client only after the corresponding Staging Actions run succeeds.
 
 The checked-in Wrangler configuration targets the separately named Staging
 Worker and Staging D1 only. No Worker deployment or production secret setup is
-performed by this change.
+performed by this change. Before applying an invitation migration, the Staging
+workflow runs a read-only D1 preflight that compares the actual schema,
+constraints, indexes, invitation roles/statuses, duplicate live emails, count,
+and digest; an equivalent schema is skipped even when its recorded migration
+name differs. The `d1_migrations` table is never edited manually.
