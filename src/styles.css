@@ -379,3 +379,4 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 .modal[role="dialog"] .modal-scroll-content{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;touch-action:pan-y}
 .modal[role="dialog"] :focus-visible{outline:3px solid rgba(143,207,26,.52);outline-offset:2px}
 @media(max-width:760px){.modal-overlay{padding:8px}.modal.wide{width:calc(100vw - 16px);max-width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}}
+@media(max-width:1050px){.modal.wide{width:100%;max-width:100%}}
