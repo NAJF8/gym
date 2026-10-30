@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app'
-import { connectAuthEmulator, getAuth, GoogleAuthProvider } from 'firebase/auth'
+import { browserLocalPersistence, connectAuthEmulator, getAuth, GoogleAuthProvider, setPersistence } from 'firebase/auth'
 import { getDatabase } from 'firebase/database'
 import { connectDatabaseEmulator } from 'firebase/database'
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
@@ -9,7 +9,6 @@ const config = {
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
@@ -17,9 +16,15 @@ const config = {
 export const firebaseConfigured = Object.values(config).every(Boolean)
 export const firebaseApp = firebaseConfigured ? (getApps()[0] ?? initializeApp(config)) : null
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null
+/** Keep the Google admin session across refreshes; callers await this before sign-in. */
+export const authPersistenceReady = firebaseAuth
+  ? setPersistence(firebaseAuth, browserLocalPersistence)
+  : Promise.resolve()
 export const firebaseDatabase = firebaseApp ? getDatabase(firebaseApp) : null
 export const firebaseFunctions = firebaseApp ? getFunctions(firebaseApp) : null
 export const googleProvider = new GoogleAuthProvider()
+export const adminGoogleProvider = new GoogleAuthProvider()
+adminGoogleProvider.setCustomParameters({ prompt: 'select_account' })
 
 const useEmulators = import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
 const emulatorHost = import.meta.env.VITE_FIREBASE_EMULATOR_HOST || '127.0.0.1'
@@ -42,4 +47,3 @@ if (useEmulators && firebaseAuth && firebaseDatabase && firebaseFunctions) {
   connectDatabaseEmulator(firebaseDatabase, emulatorHost, databasePort)
   connectFunctionsEmulator(firebaseFunctions, emulatorHost, functionsPort)
 }
-

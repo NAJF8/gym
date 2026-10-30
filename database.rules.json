@@ -3,16 +3,41 @@
     ".read": false,
     ".write": false,
     "admins": {
+      ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
       "$uid": {
         ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && auth.uid === $uid",
         ".write": false,
-        ".validate": "newData.hasChildren(['role', 'active', 'email']) && (newData.child('role').val() === 'SUPER_ADMIN' || newData.child('role').val() === 'MANAGER') && newData.child('active').isBoolean() && newData.child('email').isString()"
+        ".validate": "newData.hasChildren(['role', 'active', 'email']) && (newData.child('role').val() === 'SUPER_ADMIN' || newData.child('role').val() === 'MANAGER' || newData.child('role').val() === 'COACH') && newData.child('active').isBoolean() && newData.child('email').isString() && (!newData.hasChild('displayName') || (newData.child('displayName').isString() && newData.child('displayName').val().length <= 200)) && (!newData.hasChild('updatedAt') || newData.child('updatedAt').isString()) && (!newData.hasChild('updatedBy') || newData.child('updatedBy').isString())"
       }
     },
     "appData": {
       ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
       "settings": {
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'",
+        "logo": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "(newData.isString() && newData.val().length <= 512)"
+        },
+        "printCoachPhotoUrl": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        },
+        "printHallPhotoUrl": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        },
+        "printFooterNote": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 500"
+        },
+        "phone": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 64"
+        },
+        "instagram": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && (root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN' || root.child('admins').child(auth.uid).child('role').val() === 'MANAGER')",
+          ".validate": "newData.isString() && newData.val().length <= 512"
+        }
       },
       "schemaVersion": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
@@ -21,15 +46,31 @@
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true && root.child('admins').child(auth.uid).child('role').val() === 'SUPER_ADMIN'"
       },
       "members": {
-        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
+        ".write": false
+      },
+      "membersById": {
+        "$memberId": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+          ".validate": "!newData.exists() || (newData.hasChildren(['id', 'version']) && newData.child('id').isString() && newData.child('id').val().length <= 128 && newData.child('id').val() === $memberId && newData.child('version').isNumber() && newData.child('version').val() > 0 && newData.child('version').val() <= 1000000000 && (!newData.hasChild('name') || (newData.child('name').isString() && newData.child('name').val().length <= 200)) && (!newData.hasChild('phone') || (newData.child('phone').isString() && newData.child('phone').val().length <= 32)) && (!newData.hasChild('phoneE164') || (newData.child('phoneE164').isString() && newData.child('phoneE164').val().length <= 32)) && (!newData.hasChild('phoneDisplay') || (newData.child('phoneDisplay').isString() && newData.child('phoneDisplay').val().length <= 32)) && (!newData.hasChild('membershipId') || (newData.child('membershipId').isString() && newData.child('membershipId').val().length <= 64)) && (!newData.hasChild('authUid') || (newData.child('authUid').isString() && newData.child('authUid').val().length <= 128)) && ((!data.exists() && newData.child('version').val() === 1) || (data.exists() && newData.child('version').val() === data.child('version').val() + 1)) && !root.child('appData').child('deletedMemberIds').child($memberId).exists())"
+        }
+      },
+      "deletedMemberIds": {
+        ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+        "$memberId": {
+          ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+          ".validate": "newData.hasChildren(['deletedAt', 'version']) && newData.child('deletedAt').isString() && newData.child('deletedAt').val().length <= 64 && newData.child('version').isNumber() && newData.child('version').val() > 0 && newData.child('version').val() <= 1000000000"
+        }
       },
       "courses": {
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
+      },
+      "categories": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
       },
       "exercises": {
         ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
         "$exerciseId": {
-          ".validate": "!newData.hasChild('video') || newData.child('video').val() === '' || newData.child('video').val().matches(/^https:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be|vimeo\\.com)(\\/[A-Za-z0-9._~:\\/?#\\[\\]@!$&()*+,;=-]*)?$/)"
+          ".validate": "(!newData.hasChild('id') || (newData.child('id').isString() && newData.child('id').val().length <= 128)) && (!newData.hasChild('name') || (newData.child('name').isString() && newData.child('name').val().length <= 200)) && (!newData.hasChild('muscle') || (newData.child('muscle').isString() && newData.child('muscle').val().length <= 120)) && (!newData.hasChild('reps') || (newData.child('reps').isString() && newData.child('reps').val().length <= 64)) && (!newData.hasChild('rest') || (newData.child('rest').isString() && newData.child('rest').val().length <= 64)) && (!newData.hasChild('video') || newData.child('video').val() === '' || (newData.child('video').isString() && newData.child('video').val().length <= 512 && newData.child('video').val().matches(/^https:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be|vimeo\\.com)(\\/[A-Za-z0-9._~:\\/?#\\[\\]@!$&()*+,;=-]*)?$/)))"
         }
       }
     },
@@ -37,12 +78,23 @@
       ".read": true,
       ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
       "$exerciseId": {
-        ".validate": "newData.hasChildren(['id', 'name', 'muscle', 'sets', 'reps', 'rest', 'video']) && newData.child('id').val() === $exerciseId && newData.child('name').isString() && newData.child('muscle').isString() && newData.child('sets').isNumber() && newData.child('reps').isString() && newData.child('rest').isString() && newData.child('video').isString() && (newData.child('video').val() === '' || newData.child('video').val().matches(/^https:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be|vimeo\\.com)(\\/[A-Za-z0-9._~:\\/?#\\[\\]@!$&()*+,;=-]*)?$/))"
+        ".validate": "newData.hasChildren(['id', 'name', 'muscle', 'sets', 'reps', 'rest', 'video']) && newData.child('id').isString() && newData.child('id').val().length <= 128 && newData.child('id').val() === $exerciseId && newData.child('name').isString() && newData.child('name').val().length <= 200 && newData.child('muscle').isString() && newData.child('muscle').val().length <= 120 && newData.child('sets').isNumber() && newData.child('sets').val() > 0 && newData.child('sets').val() <= 100 && newData.child('reps').isString() && newData.child('reps').val().length <= 64 && newData.child('rest').isString() && newData.child('rest').val().length <= 64 && newData.child('video').isString() && newData.child('video').val().length <= 512 && (newData.child('video').val() === '' || newData.child('video').val().matches(/^https:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be|vimeo\\.com)(\\/[A-Za-z0-9._~:\\/?#\\[\\]@!$&()*+,;=-]*)?$/))"
       }
+    },
+    "publicCourses": {
+      ".read": true,
+      ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true"
     },
     "bootstrap": {
       ".read": false,
       ".write": false
+    },
+    "memberPhoneIndex": {
+      ".read": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+      "$phone": {
+        ".write": "auth != null && auth.token.email_verified === true && auth.token.firebase.sign_in_provider === 'google.com' && root.child('admins').child(auth.uid).child('active').val() === true",
+        ".validate": "newData.isString() && newData.val().length > 0"
+      }
     },
     "membersByUid": {
       "$uid": {

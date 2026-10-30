@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing'
-import { get, ref, set, update } from 'firebase/database'
+import { get, ref, runTransaction, set, update } from 'firebase/database'
 
 const rules = await readFile(new URL('../database.rules.json', import.meta.url), 'utf8')
 const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'gym1-4f1bb'
@@ -34,9 +34,10 @@ before(async () => {
         super: { role: 'SUPER_ADMIN', active: true, email: 'super@example.test' },
         super2: { role: 'SUPER_ADMIN', active: true, email: 'super2@example.test' },
         manager: { role: 'MANAGER', active: true, email: 'manager@example.test' },
+        coach: { role: 'COACH', active: true, email: 'coach@example.test' },
         inactive: { role: 'MANAGER', active: false, email: 'inactive@example.test' },
       },
-      appData: { schemaVersion: 1, members: { memberA: { name: 'A' } } },
+      appData: { schemaVersion: 1, membersById: { memberA: { id: 'memberA', name: 'A', version: 1 } }, deletedMemberIds: {} },
       publicExercises: {
         'bench-press': { id: 'bench-press', name: 'بنش برس', muscle: 'تمارين الصدر', sets: 4, reps: '8–10', rest: '90 ثانية', video: 'https://www.youtube.com/watch?v=old' },
       },
@@ -110,6 +111,25 @@ test('manager can use appData but cannot modify admin roles', async () => {
   await assertFails(set(ref(db, 'admins/new-manager'), { role: 'MANAGER', active: true, email: 'new@example.test' }))
 })
 
+test('active COACH can use member records but cannot change settings or admin roles', async () => {
+  const db = verifiedContext('coach').database()
+  await assertSucceeds(get(ref(db, 'appData')))
+  await assertSucceeds(set(ref(db, 'appData/membersById/coach-member'), { id: 'coach-member', name: 'Coach member', version: 1 }))
+  await assertFails(set(ref(db, 'appData/settings/gymName'), 'coach-must-not-change-this'))
+  await assertFails(set(ref(db, 'admins/another-coach'), { role: 'COACH', active: true, email: 'another-coach@example.test' }))
+})
+
+test('active admins can record and read deletion tombstones; unauthenticated users cannot', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(get(ref(manager, 'appData/deletedMemberIds')))
+  await assertSucceeds(set(ref(manager, 'appData/deletedMemberIds/synthetic-delete-test'), { deletedAt: '2026-10-18T00:00:00.000Z', version: 1 }))
+  const marker = await assertSucceeds(get(ref(manager, 'appData/deletedMemberIds/synthetic-delete-test')))
+  assert.equal(marker.val().deletedAt, '2026-10-18T00:00:00.000Z')
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds/synthetic-delete-test')))
+  await assertFails(set(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds/unauthorized-test'), { deletedAt: 'now', version: 1 }))
+  await assertFails(get(ref(env.unauthenticatedContext().database(), 'appData/deletedMemberIds')))
+})
+
 test('super admin cannot change their own admin record', async () => {
   const db = verifiedContext('super').database()
   await assertFails(set(ref(db, 'admins/super'), { role: 'MANAGER', active: false }))
@@ -134,9 +154,27 @@ test('only SUPER_ADMIN can change settings while two authorized sessions share m
   const secondSession = verifiedContext('manager').database()
   await assertSucceeds(set(ref(adminSession, 'appData/settings/gymName'), 'AL ASAS FIT'))
   await assertFails(set(ref(secondSession, 'appData/settings/gymName'), 'blocked'))
-  await assertSucceeds(set(ref(adminSession, 'appData/members/syncMarker'), { name: 'emulator-sync-ok' }))
-  const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/members/syncMarker')))
+  await assertSucceeds(set(ref(adminSession, 'appData/membersById/sync-marker'), { id: 'sync-marker', name: 'emulator-sync-ok', version: 1 }))
+  const snapshot = await assertSucceeds(get(ref(secondSession, 'appData/membersById/sync-marker')))
   assert.equal(snapshot.val().name, 'emulator-sync-ok')
+})
+
+test('MANAGER can write only scoped print identity fields', async () => {
+  const manager = verifiedContext('manager').database()
+  const allowed = {
+    logo: '/assets/logo.webp',
+    printCoachPhotoUrl: 'https://example.test/coach.webp',
+    printHallPhotoUrl: '/assets/hall.webp',
+    printFooterNote: 'نص ختامي اختباري',
+    phone: '+9647800000000',
+    instagram: '@alasas.fit',
+  }
+  await assertSucceeds(update(ref(manager, 'appData/settings'), allowed))
+  const saved = await assertSucceeds(get(ref(manager, 'appData/settings')))
+  for (const [key, value] of Object.entries(allowed)) assert.equal(saved.val()[key], value)
+  await assertFails(set(ref(manager, 'appData/settings/gymName'), 'manager-must-not-change-this'))
+  await assertFails(update(ref(manager, 'appData/settings'), { gymName: 'manager-must-not-change-this', logo: '/assets/allowed.webp' }))
+  await assertFails(set(ref(manager, 'appData/settings/printFooterNote'), 'x'.repeat(501)))
 })
 
 test('member creation and program update sync between two authorized sessions', async () => {
@@ -149,16 +187,97 @@ test('member creation and program update sync between two authorized sessions', 
     days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '10' }] }],
   }
 
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001'), member))
-  await assertSucceeds(set(ref(firstSession, 'appData/members/synthetic-member-001/days/0/exercises/0/reps'), '12'))
+  await assertSucceeds(set(ref(firstSession, 'appData/membersById/synthetic-member-001'), { ...member, version: 1 }))
+  await assertSucceeds(set(ref(firstSession, 'appData/membersById/synthetic-member-001'), { ...member, days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '12' }] }], version: 2 }))
 
-  const synced = await assertSucceeds(get(ref(secondSession, 'appData/members/synthetic-member-001')))
+  const synced = await assertSucceeds(get(ref(secondSession, 'appData/membersById/synthetic-member-001')))
   assert.deepEqual(synced.val(), {
     ...member,
+    version: 2,
     days: [{ title: 'اليوم 1', exercises: [{ id: 'bench-press', sets: 3, reps: '12' }] }],
   })
 
   const unauthorizedSession = verifiedContext('memberA').database()
   await assertFails(get(ref(unauthorizedSession, 'appData/members/synthetic-member-001')))
+})
+
+test('active admins can atomically reserve member phone index while unauthorized users cannot', async () => {
+  const manager = verifiedContext('manager').database()
+  const phonePath = 'memberPhoneIndex/%2B96478000000888'
+  const reservation = await assertSucceeds(runTransaction(ref(manager, phonePath), current => current === null ? 'synthetic-member-phone-001' : undefined))
+  assert.equal(reservation.committed, true)
+  assert.equal(reservation.snapshot.val(), 'synthetic-member-phone-001')
+
+  const unauthenticated = env.unauthenticatedContext().database()
+  await assertFails(runTransaction(ref(unauthenticated, 'memberPhoneIndex/%2B96478000000889'), current => current === null ? 'blocked' : undefined))
+  const inactive = verifiedContext('inactive').database()
+  await assertFails(runTransaction(ref(inactive, 'memberPhoneIndex/%2B96478000000890'), current => current === null ? 'blocked' : undefined))
+})
+
+test('manager can write the same parent array path used by the admin sync bridge', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(update(ref(manager), {
+    'appData/membersById/synthetic-parent-001': { id: 'synthetic-parent-001', name: 'مشترك اختباري', active: true, days: [], version: 1 },
+    'publicExercises/bench-press/id': 'bench-press',
+    'publicExercises/bench-press/name': 'بنش برس',
+    'publicExercises/bench-press/muscle': 'تمارين الصدر',
+    'publicExercises/bench-press/sets': 4,
+    'publicExercises/bench-press/reps': '8–10',
+    'publicExercises/bench-press/rest': '90 ثانية',
+    'publicExercises/bench-press/video': '',
+  }))
+})
+
+test('tombstoned member child writes are rejected while unrelated member writes remain allowed', async () => {
+  const manager = verifiedContext('manager').database()
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-target'), { id: 'race-target', name: 'Race target', version: 1 }))
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-other'), { id: 'race-other', name: 'Race other', version: 1 }))
+  await assertSucceeds(set(ref(manager, 'appData/deletedMemberIds/race-target'), { deletedAt: '2026-10-18T00:00:00.000Z', version: 1 }))
+  await assertFails(set(ref(manager, 'appData/membersById/race-target'), { id: 'race-target', name: 'stale target', version: 2 }))
+  await assertSucceeds(set(ref(manager, 'appData/membersById/race-other'), { id: 'race-other', name: 'updated other', version: 2 }))
+})
+
+test('concurrent member deletions preserve unrelated members and a concurrent create', async () => {
+  const first = verifiedContext('manager').database()
+  const second = verifiedContext('super').database()
+  await assertSucceeds(update(ref(first), {
+    'appData/membersById/race-a': { id: 'race-a', name: 'A', version: 1 },
+    'appData/membersById/race-b': { id: 'race-b', name: 'B', version: 1 },
+    'appData/membersById/race-c': { id: 'race-c', name: 'C', version: 1 },
+  }))
+  await Promise.all([
+    assertSucceeds(set(ref(first, 'appData/deletedMemberIds/race-a'), { deletedAt: '2026-10-18T00:00:01.000Z', version: 1 })),
+    assertSucceeds(set(ref(second, 'appData/deletedMemberIds/race-b'), { deletedAt: '2026-10-18T00:00:02.000Z', version: 1 })),
+    assertSucceeds(set(ref(first, 'appData/membersById/race-new'), { id: 'race-new', name: 'new', version: 1 })),
+  ])
+  const before0 = await assertSucceeds(get(ref(first, 'appData/membersById/race-a')))
+  const before1 = await assertSucceeds(get(ref(second, 'appData/membersById/race-b')))
+  assert.equal(before0.val().id, 'race-a')
+  assert.equal(before1.val().id, 'race-b')
+  const removals = await Promise.all([
+    assertSucceeds(runTransaction(ref(first, 'appData/membersById/race-a'), current => current == null || current?.id === 'race-a' ? null : undefined)),
+    assertSucceeds(runTransaction(ref(second, 'appData/membersById/race-b'), current => current == null || current?.id === 'race-b' ? null : undefined)),
+  ])
+  assert.equal(removals[0].committed, true)
+  assert.equal(removals[1].committed, true)
+  const final = await assertSucceeds(get(ref(first, 'appData/membersById')))
+  const ids = Object.values(final.val() || {}).filter(item => item && ['race-a', 'race-b', 'race-c', 'race-new'].includes(item.id)).map(item => item.id).sort()
+  assert.deepEqual(ids, ['race-c', 'race-new'])
+})
+
+test('active admin writes enforce bounded member, course, exercise, and tombstone payloads', async () => {
+  const db = verifiedContext('manager').database()
+  await assertFails(set(ref(db, 'appData/membersById/oversized-member'), {
+    id: 'oversized-member', version: 1, name: 'x'.repeat(201),
+  }))
+  await assertFails(set(ref(db, 'appData/deletedMemberIds/oversized-tombstone'), {
+    deletedAt: 'x'.repeat(65), version: 1,
+  }))
+  await assertFails(set(ref(db, 'appData/exercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
+  await assertFails(set(ref(db, 'publicExercises/oversized-exercise'), {
+    id: 'oversized-exercise', name: 'x'.repeat(201), muscle: 'صدر', sets: 3, reps: '10', rest: '60', video: '',
+  }))
 })
 
