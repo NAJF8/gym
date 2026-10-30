@@ -4195,15 +4195,89 @@ function Modal({
   children: React.ReactNode;
   wide?: boolean;
 }) {
-  return (
-    <div className="modal-overlay" onClick={onClose}>
+  const modalRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const titleId = useRef(`modal-title-${uid()}`).current;
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const modal = modalRef.current;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "[href]",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "[tabindex]:not([tabindex=\"-1\"])",
+    ].join(",");
+    const focusables = () => modal
+      ? Array.from(modal.querySelectorAll<HTMLElement>(focusableSelector))
+      : [];
+    const focusInitialControl = () => {
+      const first = focusables()[0] || modal;
+      first?.focus();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !modal) return;
+      const items = focusables();
+      if (!items.length) {
+        event.preventDefault();
+        modal.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    const frame = window.requestAnimationFrame(focusInitialControl);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus({ preventScroll: true });
+    };
+  }, []);
+
+  const content = (
+    <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section
+        ref={modalRef}
         className={wide ? "modal wide" : "modal"}
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <div className="modal-head">
-          <h2>{title}</h2>
-          <button className="icon-btn" onClick={onClose}>
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="إغلاق النافذة"
+            onClick={onClose}
+          >
             <X size={18} />
           </button>
         </div>
@@ -4211,6 +4285,7 @@ function Modal({
       </section>
     </div>
   );
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
   const qrMarkup = (e: MemberExercise) => s.showBarcodes
