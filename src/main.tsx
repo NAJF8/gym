@@ -3714,7 +3714,7 @@ function MemberPortal({
                     <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {s.showBarcodes && videoId ? "مشاهدة شرح التمرين" : "فتح تفاصيل التمرين"}</a>{s.showBarcodes && (qrTarget ? <a className="exercise-qr" href={qrTarget} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR فيديو ${e.name}`}><QRCodeSVG value={qrTarget} size={72} includeMargin level="M" /><span>امسح لفتح الفيديو</span></a> : <p className="exercise-qr-unavailable" role="status">لا يوجد رابط فيديو لهذا التمرين</p>)}</div>
                   </article>;
                   };
-                  if (block.kind === "superset") return <section className="member-superset-card" key={block.id}><header><Layers3 size={18} /><strong>سوبر تمرين {blockIndex + 1}</strong><span>{block.items.length} تمارين مترابطة</span></header><div className="member-superset-items">{block.items.map((exercise, index) => <div className="member-superset-item" key={`${exerciseInstanceKey(exercise)}-${index}`}>{renderExercise(exercise, index)}{index < block.items.length - 1 && <div className="superset-plus" aria-hidden="true">+</div>}</div>)}</div></section>;
+                  if (block.kind === "superset") return <section className="member-superset-card" key={block.id}><header><Layers3 size={18} /><strong>سوبر تمرين {blockIndex + 1}</strong><span>{block.items.length} تمارين مترابطة</span></header><div className="member-superset-items">{block.items.map((exercise, index) => renderExercise(exercise, index))}</div></section>;
                   return renderExercise(block.items[0], blockIndex);
                 }) : <Empty icon={<Dumbbell size={28} />} title="لا توجد تمارين لهذا اليوم" text="يمكنك اختيار يوم آخر من الخطة." />}
               </div>
@@ -4423,16 +4423,16 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
         ? `<tr class="superset-label"><td colspan="${s.showBarcodes ? 4 : 3}"><strong>سوبر تمرين</strong><small>مجموعة مترابطة · ${block.items.length} تمارين</small></td></tr>`
         : "";
       if (block.kind === "superset") {
-        const columns = Math.min(block.items.length, 3);
+        const columns = Math.min(block.items.length, 2);
         const cards = block.items.map((e) => {
           number += 1;
           const target = exerciseQrTarget(e);
           const qr = s.showBarcodes
             ? `<div style="display:grid;place-items:center;min-height:15mm">${target ? renderToStaticMarkup(<QRCodeSVG value={target} size={52} includeMargin level="M" />) : `<span style="font-size:7px;color:#666;text-align:center">لا يوجد رابط فيديو لهذا التمرين</span>`}</div>`
             : "";
-          return `<article style="display:grid;gap:2mm;border:1px solid #cfd3d0;border-radius:2mm;padding:3mm;break-inside:avoid;page-break-inside:avoid;background:#fff"><div><strong style="display:block;font-size:10px">${number}. ${escapeHtml(e.name)}</strong><small style="display:block;color:#555;font-size:8px;margin-top:1mm">${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:2mm;text-align:center;font-size:8px"><span><b style="display:block;font-size:7px;color:#666">المجموعات</b>${escapeHtml(String(e.sets ?? "—"))}</span><span><b style="display:block;font-size:7px;color:#666">التكرارات</b>${escapeHtml(e.reps || "—")}</span></div>${qr}</article>`;
+          return `<article class="print-superset-card" style="display:grid;gap:2mm;border:1px solid #cfd3d0;border-radius:2mm;padding:3mm;break-inside:avoid;page-break-inside:avoid;background:#fff"><div><strong style="display:block;font-size:10px">${number}. ${escapeHtml(e.name)}</strong><small style="display:block;color:#555;font-size:8px;margin-top:1mm">${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:2mm;text-align:center;font-size:8px"><span><b style="display:block;font-size:7px;color:#666">المجموعات</b>${escapeHtml(String(e.sets ?? "—"))}</span><span><b style="display:block;font-size:7px;color:#666">التكرارات</b>${escapeHtml(e.reps || "—")}</span></div>${qr}</article>`;
         }).join("");
-        return `${label}<tr class="superset-row"><td colspan="${s.showBarcodes ? 4 : 3}"><div style="display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:3mm">${cards}</div></td></tr>`;
+        return `${label}<tr class="superset-row"><td colspan="${s.showBarcodes ? 4 : 3}"><div class="print-superset-grid" style="display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:3mm;break-inside:avoid;page-break-inside:avoid">${cards}</div></td></tr>`;
       }
       const items = block.items.map((e) => {
         number += 1;

@@ -9,7 +9,11 @@ const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'ut
 test('superset presentation keeps independent cards in editor, member portal, and print', () => {
   assert.match(main, /className="superset-editor-items"/)
   assert.match(main, /className="member-superset-items"/)
+  assert.match(main, /className="member-superset-items">\{block\.items\.map\(\(exercise, index\) => renderExercise\(exercise, index\)\)\}/)
+  assert.doesNotMatch(main, /className="member-superset-item"/)
   assert.match(main, /grid-template-columns:repeat\(\$\{columns\}/)
+  assert.match(main, /class="print-superset-grid"/)
+  assert.match(main, /const columns = Math\.min\(block\.items\.length, 2\)/)
   assert.match(main, /dayBlocks\(day\)/)
   assert.match(styles, /\.superset-editor-items\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)
   assert.match(styles, /\.member-superset-items\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)
