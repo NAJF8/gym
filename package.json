@@ -24,7 +24,7 @@
     "test:rules": "node --test tests/rtdb.rules.test.mjs",
     "test:library": "node --experimental-strip-types --test tests/exercise-library.test.mjs",
     "test:day-notes": "node --test tests/day-notes-contract.test.mjs",
-    "test:exercise": "node --test tests/exercise-details-contract.test.mjs"
+    "test:exercise": "node --test tests/exercise-details-contract.test.mjs tests/superset-barcode-contract.test.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-arabic": "5.3.0",

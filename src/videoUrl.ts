@@ -39,3 +39,9 @@ export function youtubeEmbedUrl(value: unknown): string | null {
   const id = youtubeVideoId(value)
   return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&modestbranding=1` : null
 }
+
+/** Return the stored URL only when it points to one concrete YouTube video. */
+export function youtubeQrTarget(value: unknown): string | null {
+  const canonical = safeVideoUrl(value)
+  return youtubeVideoId(canonical) ? canonical : null
+}

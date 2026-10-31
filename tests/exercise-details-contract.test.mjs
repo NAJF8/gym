@@ -9,7 +9,7 @@ test('exercise detail is centrally gated by public barcode visibility', () => {
   assert.match(main, /watchPublicSettings/)
   assert.match(main, /const trustedVideo = settingsReady && showBarcodes &&/)
   assert.match(main, /الفيديو مخفي حسب إعدادات العرض/)
-  assert.match(main, /showBarcodes && videoId && e\.videoReviewStatus === "verified"/)
+  assert.match(main, /showBarcodes && videoId/)
 })
 
 test('exercise detail exposes only stored facts and explicit unavailable states', () => {

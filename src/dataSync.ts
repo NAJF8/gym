@@ -342,10 +342,9 @@ export async function writeAdminData<T>(
     const nextSettings = appData.settings && typeof appData.settings === "object"
       ? appData.settings as Record<string, unknown>
       : null;
-    const previousSettings = previous?.settings && typeof previous.settings === "object"
-      ? previous.settings as Record<string, unknown>
-      : null;
-    if (typeof nextSettings?.showBarcodes === "boolean" && nextSettings.showBarcodes !== previousSettings?.showBarcodes)
+    // Keep the public projection self-healing. A previous appData/settings
+    // value can already match while publicSettings is missing or stale.
+    if (typeof nextSettings?.showBarcodes === "boolean")
       updates["publicSettings/showBarcodes"] = nextSettings.showBarcodes;
     if (appData.migratedAt !== undefined)
       updates["appData/migratedAt"] = appData.migratedAt;

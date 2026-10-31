@@ -82,7 +82,7 @@ import {
 } from "./memberPin";
 import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, cancelAdminInvitation, inviteAdmin, listManagedAdmins, touchAdminLogin, updateManagedAdmin, updateOwnDisplayName, type ManagedAdmin } from "./adminManagement";
-import { isSafeVideoUrl, safeVideoUrl, youtubeEmbedUrl, youtubeVideoId } from "./videoUrl";
+import { isSafeVideoUrl, safeVideoUrl, youtubeEmbedUrl, youtubeQrTarget, youtubeVideoId } from "./videoUrl";
 import { safeImageUrl } from "./imageUrl";
 import { APP_VERSION } from "./release";
 import { uploadPrintImage, waitForPrintImageDeployment, type PrintImageSlot } from "./imageUpload";
@@ -112,9 +112,9 @@ function MemberPinGate(){
   useEffect(() => watchPublicSettings<{ showBarcodes?: unknown }>((value) => {
     setMemberSettings((current) => ({
       ...current,
-      // Existing deployments without the projection retain the historical ON
-      // behavior, but only after the remote read has completed.
-      showBarcodes: typeof value?.showBarcodes === "boolean" ? value.showBarcodes : true,
+      // Missing or malformed public projections fail closed until an admin
+      // saves the setting and the projection is repaired.
+      showBarcodes: typeof value?.showBarcodes === "boolean" ? value.showBarcodes : false,
     }));
     setMemberSettingsReady(true);
   }, () => {
@@ -503,6 +503,7 @@ const cloneDays = (days: unknown): DayPlan[] =>
             }
             if (exercise.anatomyView === "front" || exercise.anatomyView === "back") item.anatomyView = exercise.anatomyView;
             if (typeof exercise.video === "string" && exercise.video) item.video = exercise.video;
+            if (exercise.videoReviewStatus === "needs_review" || exercise.videoReviewStatus === "verified" || exercise.videoReviewStatus === "none") item.videoReviewStatus = exercise.videoReviewStatus;
             if (typeof exercise.description === "string" && exercise.description) item.description = exercise.description;
             if (typeof exercise.image === "string" && exercise.image) item.image = exercise.image;
             if (typeof exercise.weight === "string" && exercise.weight) item.weight = exercise.weight;
@@ -2113,8 +2114,8 @@ function courseUrl(id: string) {
 function memberLoginUrl() {
   return `${location.origin}${location.pathname.replace(/admin\/?$/, "")}`;
 }
-function exerciseTarget(exercise: Exercise) {
-  return exerciseUrl(exercise.id);
+function exerciseQrTarget(exercise: Pick<Exercise, "video">) {
+  return youtubeQrTarget(exercise.video);
 }
 function Barcodes({
   exercises,
@@ -2190,6 +2191,7 @@ function Barcodes({
   const selectedVideoId = youtubeVideoId(selectedVideo);
   const selectedVideoEmbed = selectedVideoId ? youtubeEmbedUrl(selectedVideo) : null;
   const selectedVideoVerified = selected?.videoReviewStatus === "verified" && Boolean(selectedVideoId);
+  const barcodeTarget = mode === "exercises" ? (selected ? exerciseQrTarget(selected) : null) : url;
   const copyExerciseUrl = async () => {
     if (!url || !navigator.clipboard) return;
     await navigator.clipboard.writeText(url);
@@ -2307,10 +2309,10 @@ function Barcodes({
               {selected.description && <p className="barcode-description">{selected.description}</p>}
               {showBarcodes && selectedVideoEmbed && previewVideo && <div className="barcode-video-preview"><iframe title={`معاينة فيديو ${selected.name}`} src={selectedVideoEmbed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>}
               {showBarcodes && selectedVideoId && <div className="barcode-video-actions"><button className="secondary-btn" type="button" onClick={() => setPreviewVideo((value) => !value)}><Play size={15}/>{previewVideo ? "إخفاء المعاينة" : "معاينة الفيديو"}</button><a className="text-btn" href={selectedVideo || "#"} target="_blank" rel="noreferrer"><ExternalLink size={14}/> فتح YouTube</a></div>}
-               {showBarcodes ? <div className="qr-box">
-                 <QRCodeSVG value={url} size={180} includeMargin level="M" />
-               </div> : <p className="qr-disabled-note" role="status">عرض الباركودات متوقف من إعدادات النظام. ما زال رابط التمرين متاحاً.</p>}
-              <code dir="ltr">{url}</code>
+               {showBarcodes ? barcodeTarget ? <div className="qr-box">
+                 <QRCodeSVG value={barcodeTarget} size={180} includeMargin level="M" />
+               </div> : <p className="qr-unavailable" role="status">لا يوجد رابط فيديو لهذا التمرين</p> : <p className="qr-disabled-note" role="status">عرض الباركودات متوقف من إعدادات النظام. ما زال رابط التمرين متاحاً.</p>}
+               <code dir="ltr">{barcodeTarget || url}</code>
               <div className="modal-actions">
                 <Button
                   secondary
@@ -2326,14 +2328,14 @@ function Barcodes({
                 >
                   {copied ? "تم النسخ" : "نسخ رابط التمرين"}
                 </Button>
-                 {showBarcodes && <Button
+                  {showBarcodes && barcodeTarget && <Button
                   secondary
                   onClick={download}
                   icon={<QrCode size={15} />}
                 >
                   تنزيل QR
                  </Button>}
-                 {showBarcodes && <Button
+                  {showBarcodes && barcodeTarget && <Button
                   onClick={() => window.print()}
                   icon={<Printer size={16} />}
                 >
@@ -2651,7 +2653,7 @@ function CourseWizard({
   }));
   const detach = (key: string) => setSelected((x) => x.map((list, i) => i === day ? list.map((exercise) => exerciseInstanceKey(exercise) === key ? (({ supersetId: _group, supersetOrder: _order, ...rest }) => rest)(exercise) : exercise) : list));
   return (
-    <Modal title={title} onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} wide className={step === 3 ? "course-editor-modal" : undefined}>
       <WizardSteps step={step} />
       {step === 1 && (
         <div className="wizard-pane">
@@ -2864,7 +2866,7 @@ function Picker({
           <label className="coach-day-note"><span><CircleAlert size={16} /> ملاحظات الكابتن</span><textarea disabled={disabled} value={dayNote} onChange={(event) => setDayNote(event.target.value)} placeholder="مثال: جري 5 دقايق + تمارين معدة" maxLength={2000} /></label>
           <div className="selected-exercise-stack">
             {!blocks.length && <div className="course-empty-exercises"><Dumbbell size={27} /><strong>لم تتم إضافة تمارين لهذا اليوم</strong><span>اختر تمريناً من المكتبة ليظهر هنا.</span></div>}
-            {blocks.map((block, blockIndex) => block.kind === "superset" ? <article className="superset-editor-card" key={block.id}><header><div><span className="superset-badge"><Layers3 size={15} /> سوبر تمرين</span><strong>مجموعة {blockIndex + 1}</strong><small>{block.items.length} تمارين مترابطة</small></div><div className="block-order-actions">{!disabled && <><button type="button" title="تحريك المجموعة للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك المجموعة للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button></>}</div></header><div className="superset-editor-items">{block.items.map((exercise, index) => <div key={`${exerciseInstanceKey(exercise)}-${index}`} className="superset-editor-item">{exerciseEditor(exercise, block.id, index)}{index < block.items.length - 1 && <div className="superset-divider" aria-hidden="true"><span>+</span></div>}</div>)}</div><button type="button" className="add-to-superset-button" disabled={disabled} onClick={() => setSupersetTarget(block.items[0] ? exerciseInstanceKey(block.items[0]) : null)}><Plus size={16} /> إضافة تمرين إلى السوبر</button></article> : <article className="selected-exercise-card" key={block.id}><div className="selected-card-top"><GripVertical size={18} className="drag-hint" /><span className="selected-card-number">{blockIndex + 1}</span>{exerciseEditor(block.items[0])}<div className="selected-card-toolbar">{!disabled && <><button type="button" title="تحريك للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button><button type="button" className="add-superset-inline" onClick={() => setSupersetTarget(exerciseInstanceKey(block.items[0]))}><Plus size={15} /> تمرين</button></>}</div></div></article>)}
+            {blocks.map((block, blockIndex) => block.kind === "superset" ? <article className="superset-editor-card" key={block.id}><header><div><span className="superset-badge"><Layers3 size={15} /> سوبر تمرين</span><strong>مجموعة {blockIndex + 1}</strong><small>{block.items.length} تمارين مترابطة</small></div><div className="block-order-actions">{!disabled && <><button type="button" title="تحريك المجموعة للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك المجموعة للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button></>}</div></header><div className="superset-editor-items">{block.items.map((exercise, index) => <div key={`${exerciseInstanceKey(exercise)}-${index}`} className="superset-editor-item"><span className="superset-card-index">تمرين {index + 1}</span>{exerciseEditor(exercise, block.id, index)}</div>)}</div><button type="button" className="add-to-superset-button" disabled={disabled} onClick={() => setSupersetTarget(block.items[0] ? exerciseInstanceKey(block.items[0]) : null)}><Plus size={16} /> إضافة تمرين إلى السوبر</button></article> : <article className="selected-exercise-card" key={block.id}><div className="selected-card-top"><GripVertical size={18} className="drag-hint" /><span className="selected-card-number">{blockIndex + 1}</span>{exerciseEditor(block.items[0])}<div className="selected-card-toolbar">{!disabled && <><button type="button" title="تحريك للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button><button type="button" className="add-superset-inline" onClick={() => setSupersetTarget(exerciseInstanceKey(block.items[0]))}><Plus size={15} /> تمرين</button></>}</div></div></article>)}
           </div>
         </section>
       </div>
@@ -3701,14 +3703,15 @@ function MemberPortal({
                 {list.length ? dayBlocks(list).map((block, blockIndex) => {
                   const renderExercise = (e: MemberExercise, idx: number) => {
                   const exerciseKey = exerciseInstanceKey(e);
-                  const videoId = youtubeVideoId(e.video);
+                    const videoId = youtubeVideoId(e.video);
+                    const qrTarget = exerciseQrTarget(e);
                   const exerciseHref = exerciseUrl(e.id);
                   return <article className={done.includes(exerciseKey) ? "member-exercise-card completed" : "member-exercise-card"} key={`${exerciseKey}-${blockIndex}-${idx}`}>
                     <div className="exercise-card-header"><button aria-label={`تحديد إنجاز ${e.name}`} className={done.includes(exerciseKey) ? "exercise-check checked" : "exercise-check"} onClick={() => setDone((x) => x.includes(exerciseKey) ? x.filter((i) => i !== exerciseKey) : [...x, exerciseKey])}>{done.includes(exerciseKey) && <Check size={16} />}</button><div><span className="exercise-number">تمرين {idx + 1}</span><h3>{e.name}</h3><p>{e.muscle}</p></div></div>
                     {e.image && <img className="member-exercise-image" src={e.image} alt={`صورة توضيحية لـ ${e.name}`} loading="lazy" />}
                     {(e.description || e.notes) && <p className="member-exercise-note">{e.notes && <b>ملاحظة: </b>}{e.notes || e.description}</p>}
                     <div className="member-exercise-metrics" aria-label={`تفاصيل ${e.name}`}><Metric label="المجموعات" value={e.sets} /><Metric label="التكرارات" value={e.reps} /></div>
-                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {s.showBarcodes && videoId && e.videoReviewStatus === "verified" ? "مشاهدة شرح التمرين" : "فتح تفاصيل التمرين"}</a>{s.showBarcodes && <a className="exercise-qr" href={exerciseHref} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR شرح ${e.name}`}><QRCodeSVG value={exerciseHref} size={72} includeMargin level="M" /><span>امسح للشرح</span></a>}</div>
+                    <div className="member-exercise-actions"><a className="exercise-watch-button" href={exerciseHref} target="_blank" rel="noopener noreferrer"><Play size={15} fill="currentColor" /> {s.showBarcodes && videoId ? "مشاهدة شرح التمرين" : "فتح تفاصيل التمرين"}</a>{s.showBarcodes && (qrTarget ? <a className="exercise-qr" href={qrTarget} target="_blank" rel="noopener noreferrer" aria-label={`فتح QR فيديو ${e.name}`}><QRCodeSVG value={qrTarget} size={72} includeMargin level="M" /><span>امسح لفتح الفيديو</span></a> : <p className="exercise-qr-unavailable" role="status">لا يوجد رابط فيديو لهذا التمرين</p>)}</div>
                   </article>;
                   };
                   if (block.kind === "superset") return <section className="member-superset-card" key={block.id}><header><Layers3 size={18} /><strong>سوبر تمرين {blockIndex + 1}</strong><span>{block.items.length} تمارين مترابطة</span></header><div className="member-superset-items">{block.items.map((exercise, index) => <div className="member-superset-item" key={`${exerciseInstanceKey(exercise)}-${index}`}>{renderExercise(exercise, index)}{index < block.items.length - 1 && <div className="superset-plus" aria-hidden="true">+</div>}</div>)}</div></section>;
@@ -3879,14 +3882,14 @@ function PublicExerciseDetail({
     [exerciseId],
   );
   useEffect(() => watchPublicSettings<{ showBarcodes?: unknown }>((value) => {
-    setShowBarcodes(typeof value?.showBarcodes === "boolean" ? value.showBarcodes : true);
+    setShowBarcodes(typeof value?.showBarcodes === "boolean" ? value.showBarcodes : false);
     setSettingsReady(true);
   }, () => {
     setShowBarcodes(false);
     setSettingsReady(true);
   }), []);
   const video = safeVideoUrl(exercise?.video);
-  const trustedVideo = settingsReady && showBarcodes && exercise?.videoReviewStatus === "verified" && youtubeVideoId(video) ? video : null;
+  const trustedVideo = settingsReady && showBarcodes && youtubeQrTarget(video) ? video : null;
   const embed = trustedVideo ? youtubeEmbedUrl(trustedVideo) : null;
   return (
     <main className="exercise-detail-page" dir="rtl">
@@ -3895,7 +3898,7 @@ function PublicExerciseDetail({
         {exercise ? (
           <>
              <div className="exercise-detail-intro"><div className="exercise-detail-icon">{exercise.image ? <img src={exercise.image} alt={`صورة توضيحية لـ ${exercise.name}`} /> : <div className="exercise-image-missing" role="img" aria-label="لا توجد صورة موثوقة للتمرين"><Dumbbell size={32} /><span>الصورة غير متوفرة</span></div>}</div><div><span className="section-kicker">تفاصيل التمرين</span><h1>{exercise.name}</h1><p className="exercise-muscle-label">{exercise.english || "الاسم الإنجليزي غير متوفر"}</p></div></div>
-             {embed ? <div className="exercise-video-frame"><iframe title={`فيديو شرح ${exercise.name}`} src={embed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> : <div className="exercise-image-first-panel" role="status"><strong>{settingsReady && showBarcodes ? "لا يوجد فيديو YouTube موثّق" : "الفيديو مخفي حسب إعدادات العرض"}</strong><span>تظهر الصورة التوضيحية والعضلات والخطوات المتاحة من السجل بدلاً من قسم الفيديو.</span></div>}
+             {embed ? <div className="exercise-video-frame"><iframe title={`فيديو شرح ${exercise.name}`} src={embed} loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> : <div className="exercise-image-first-panel" role="status"><strong>{settingsReady && showBarcodes ? "لا يوجد رابط فيديو لهذا التمرين" : "الفيديو مخفي حسب إعدادات العرض"}</strong><span>تظهر الصورة التوضيحية والعضلات والخطوات المتاحة من السجل بدلاً من قسم الفيديو.</span></div>}
              {exercise.description && <div className="exercise-instructions"><h2>شرح مختصر لطريقة الأداء</h2><p>{exercise.description}</p></div>}
              <div className="detail-grid"><span>المجموعات<strong>{exercise.sets}</strong></span><span>التكرارات<strong>{exercise.reps}</strong></span></div>
              <ExerciseDetailFacts exercise={exercise} />
@@ -4304,11 +4307,13 @@ function Modal({
   onClose,
   children,
   wide = false,
+  className,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   wide?: boolean;
+  className?: string;
 }) {
   const modalRef = useRef<HTMLElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -4379,7 +4384,7 @@ function Modal({
     <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section
         ref={modalRef}
-        className={wide ? "modal wide" : "modal"}
+        className={[wide ? "modal wide" : "modal", className].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -4403,9 +4408,11 @@ function Modal({
   return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
-  const qrMarkup = (e: MemberExercise) => s.showBarcodes
-    ? `<td class="qr-cell"><div class="qr">${renderToStaticMarkup(<QRCodeSVG value={exerciseTarget(e)} size={64} includeMargin level="M" />)}</div></td>`
-    : "";
+  const qrMarkup = (e: MemberExercise) => {
+    if (!s.showBarcodes) return "";
+    const target = exerciseQrTarget(e);
+    return `<td class="qr-cell">${target ? `<div class="qr">${renderToStaticMarkup(<QRCodeSVG value={target} size={64} includeMargin level="M" />)}</div>` : `<span class="qr-unavailable">لا يوجد رابط فيديو لهذا التمرين</span>`}</td>`;
+  };
   const courseQrMarkup = s.showBarcodes
     ? `<div class="course-qr">${renderToStaticMarkup(<QRCodeSVG value={memberLoginUrl()} size={76} includeMargin level="M" />)}<strong>امسح الرمز للدخول إلى حسابك وعرض جدول تمارينك</strong></div>`
     : "";
@@ -4413,8 +4420,20 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
     let number = 0;
     return dayBlocks(day).map((block) => {
       const label = block.kind === "superset"
-        ? `<tr class="superset-label"><td colspan="${s.showBarcodes ? 4 : 3}"><strong>سوبر تمرين</strong><small>مجموعة مترابطة · ${block.items.length} تمارين</small></td>${s.showBarcodes ? "<td></td>" : ""}</tr>`
+        ? `<tr class="superset-label"><td colspan="${s.showBarcodes ? 4 : 3}"><strong>سوبر تمرين</strong><small>مجموعة مترابطة · ${block.items.length} تمارين</small></td></tr>`
         : "";
+      if (block.kind === "superset") {
+        const columns = Math.min(block.items.length, 3);
+        const cards = block.items.map((e) => {
+          number += 1;
+          const target = exerciseQrTarget(e);
+          const qr = s.showBarcodes
+            ? `<div style="display:grid;place-items:center;min-height:15mm">${target ? renderToStaticMarkup(<QRCodeSVG value={target} size={52} includeMargin level="M" />) : `<span style="font-size:7px;color:#666;text-align:center">لا يوجد رابط فيديو لهذا التمرين</span>`}</div>`
+            : "";
+          return `<article style="display:grid;gap:2mm;border:1px solid #cfd3d0;border-radius:2mm;padding:3mm;break-inside:avoid;page-break-inside:avoid;background:#fff"><div><strong style="display:block;font-size:10px">${number}. ${escapeHtml(e.name)}</strong><small style="display:block;color:#555;font-size:8px;margin-top:1mm">${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:2mm;text-align:center;font-size:8px"><span><b style="display:block;font-size:7px;color:#666">المجموعات</b>${escapeHtml(String(e.sets ?? "—"))}</span><span><b style="display:block;font-size:7px;color:#666">التكرارات</b>${escapeHtml(e.reps || "—")}</span></div>${qr}</article>`;
+        }).join("");
+        return `${label}<tr class="superset-row"><td colspan="${s.showBarcodes ? 4 : 3}"><div style="display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:3mm">${cards}</div></td></tr>`;
+      }
       const items = block.items.map((e) => {
         number += 1;
         return `<tr class="${block.kind === "superset" ? "superset-row" : ""}"><td class="exercise-name"><strong>${number}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td>${qrMarkup(e)}</tr>`;
