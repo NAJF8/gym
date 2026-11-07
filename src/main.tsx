@@ -1,4 +1,4 @@
-import { Component, StrictMode, useEffect, useRef, useState } from "react";
+import { Component, StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -53,7 +53,6 @@ import {
   backupLocalSnapshot,
   dedupeById,
   firebaseSyncError,
-  readMemberProfile,
   readAdminData,
   readAdminMember,
   readAdminDeletionConflicts,
@@ -80,10 +79,10 @@ import {
   pinServiceConfigured,
   type PinAuditLogEntry,
 } from "./memberPin";
-import { firebaseAuth } from "./firebase";
 import { acceptAdminInvitation, cancelAdminInvitation, inviteAdmin, listManagedAdmins, touchAdminLogin, updateManagedAdmin, updateOwnDisplayName, type ManagedAdmin } from "./adminManagement";
 import { isSafeVideoUrl, safeVideoUrl, youtubeEmbedUrl, youtubeQrTarget, youtubeVideoId } from "./videoUrl";
-import { safeImageUrl } from "./imageUrl";
+import { escapeHtml, printImageTag, safeImageUrl } from "./imageUrl";
+import { canEditSiteSettings, isAdminPath } from "./access";
 import { APP_VERSION } from "./release";
 import { uploadPrintImage, waitForPrintImageDeployment, type PrintImageSlot } from "./imageUpload";
 import { mergeExerciseLibrary } from "./exerciseLibrary";
@@ -159,7 +158,7 @@ function MemberPinGate(){
   };
   if(!pinServiceConfigured)return <AuthNotice title="بوابة المشترك متوقفة بأمان" text="لم يتم ضبط عنوان خدمة PIN الموثوقة. لا يمكن تسجيل الدخول من المتصفح مباشرة."/>;
   if(restoring)return <AuthNotice title="جارٍ استعادة جلسة المشترك" text="يتم التحقق من صلاحية الجلسة وتحميل كورسك التدريبي..." />;
-  if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||submittingRef.current||pin.length!==4||!phone.trim())return;submittingRef.current=true;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.customToken){if(!firebaseAuth)throw new Error('Firebase غير مهيأ');const signed=await (await import('firebase/auth')).signInWithCustomToken(firebaseAuth,result.customToken);const profile=await readMemberProfile<Member>(signed.user.uid);if(!profile)throw new Error('لم يتم العثور على ملف العضوية بعد التحقق');setMember(profile);setSessionToken(result.customToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.customToken)}catch{}}else if(result.member&&result.sessionToken){const normalized=normalizeMember(result.member)||(result.member as Member);setMember(normalized);setSessionToken(result.sessionToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.sessionToken)}catch{}}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{submittingRef.current=false;setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><div className="pin-input-wrap"><input id="member-pin" type={showPin ? "text" : "password"} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x6f0)).replace(/\D/g,'').slice(0,4))}/><button type="button" className="icon-btn pin-visibility-btn" aria-label={showPin ? "إخفاء الرمز" : "إظهار الرمز"} onClick={()=>setShowPin(v=>!v)}>{showPin ? <Eye size={17}/> : <EyeOff size={17}/>}</button></div><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
+  if(!member)return <main className="auth-page member-login-page"><div className="member-login-shell"><header className="member-login-brand"><Logo s={defaults}/><span>AL ASAS FIT · بوابة المشترك</span></header><section className="panel auth-card member-login-card"><div className="member-login-icon"><Dumbbell size={25}/></div><span className="status">دخول المشتركين</span><h1>أهلاً بعودتك</h1><p>ادخل رقم هاتفك ورمز الدخول المكوّن من 4 أرقام الذي استلمته من الكابتن حتى تشوف جدول تمارينك.</p><form className="member-login-form" onSubmit={async(e)=>{e.preventDefault();if(busy||submittingRef.current||pin.length!==4||!phone.trim())return;submittingRef.current=true;setBusy(true);setError('');try{const result=await loginMemberWithPin(phone,pin);if(result.member&&result.sessionToken){const normalized=normalizeMember(result.member)||(result.member as Member);setMember(normalized);setSessionToken(result.sessionToken);try{sessionStorage.setItem(MEMBER_SESSION_STORAGE_KEY,result.sessionToken)}catch{}}else throw new Error('جلسة المشترك غير صالحة')}catch(err){setError(err instanceof Error?err.message:'تعذر تسجيل الدخول')}finally{submittingRef.current=false;setBusy(false)}}}><label htmlFor="member-phone">رقم الهاتف</label><input id="member-phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" placeholder="07XXXXXXXXX" required value={phone} onChange={e=>setPhone(e.target.value)} /><label htmlFor="member-pin">رمز الدخول (4 أرقام)</label><div className="pin-input-wrap"><input id="member-pin" type={showPin ? "text" : "password"} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{4}" maxLength={4} dir="ltr" placeholder="••••" required value={pin} onChange={e=>setPin(e.target.value.replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x6f0)).replace(/\D/g,'').slice(0,4))}/><button type="button" className="icon-btn pin-visibility-btn" aria-label={showPin ? "إخفاء الرمز" : "إظهار الرمز"} onClick={()=>setShowPin(v=>!v)}>{showPin ? <Eye size={17}/> : <EyeOff size={17}/>}</button></div><button className="member-login-submit" type="submit" disabled={busy||pin.length!==4||!phone.trim()}>{busy?'جارٍ التحقق…':'عرض كورسي التدريبي'} <ArrowLeft size={18}/></button>{error&&<p className="auth-error" role="alert">{error}</p>}</form><p className="auth-help">ما عندك رمز الدخول؟ تواصل ويا الكابتن حتى يفعّل عضويتك.</p></section><footer className="member-login-footer">الدخول برقم الهاتف والرمز فقط · حسابات Google للمدراء</footer></div></main>;
   return <MemberPortal s={memberSettingsReady ? memberSettings : { ...memberSettings, showBarcodes: false }} member={member} onSignOut={signOut}/>;
 }
 type CategoryItem = {
@@ -804,7 +803,7 @@ function Sidebar({
     <aside className="sidebar">
       <Logo s={s} />
       <nav>
-        {(
+        {canEditSiteSettings(role) && (
           <button
             className={`nav-item ${page === "settings" ? "active" : ""}`}
             onClick={() => {
@@ -1295,6 +1294,8 @@ function App({
     normalizeCategories(read<unknown>("alasas-categories", defaultCategories)),
   );
   const [page, setPage] = useState<Page>("home");
+  // Defence in depth: a role that cannot write settings (COACH) never lands on that page.
+  useEffect(() => { if (page === "settings" && !canEditSiteSettings(role)) setPage("home"); }, [page, role]);
   const [open, setOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [currentHash, setCurrentHash] = useState(() => window.location.hash);
@@ -1449,7 +1450,7 @@ function App({
                   initialSearch={globalSearch}
                 />
               )}{" "}
-              {page === "settings" && (
+              {page === "settings" && canEditSiteSettings(role) && (
                 role === "SUPER_ADMIN" ? (
                   <SettingsPage s={settings} setS={setSettings} settingsReady={settingsReady} />
                 ) : (
@@ -2399,6 +2400,209 @@ function Barcodes({
     </>
   );
 }
+
+function EditCourseExerciseModal({
+  courseName,
+  dayIndex,
+  exercise,
+  allExercises,
+  onSave,
+  onClose,
+}: {
+  courseName: string;
+  dayIndex: number;
+  exercise: MemberExercise;
+  allExercises: Exercise[];
+  onSave: (updated: MemberExercise) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(exercise.name || "");
+  const [sets, setSets] = useState(String(exercise.sets ?? "4"));
+  const [reps, setReps] = useState(String(exercise.reps || "10"));
+  const [notes, setNotes] = useState(exercise.notes || "");
+  const [video, setVideo] = useState(exercise.video || "");
+  const [muscle, setMuscle] = useState(exercise.muscle || "");
+  const [image, setImage] = useState(exercise.image || "");
+
+  const handleSave = () => {
+    onSave({
+      ...exercise,
+      name: name.trim() || exercise.name,
+      sets: sets.trim() || exercise.sets,
+      reps: reps.trim() || exercise.reps,
+      notes: notes.trim() || undefined,
+      video: video.trim() || undefined,
+      muscle: muscle || exercise.muscle,
+      image: image || exercise.image,
+    });
+  };
+
+  return (
+    <Modal
+      title={`تعديل التمرين داخل الكورس — ${exercise.name}`}
+      onClose={onClose}
+    >
+      <div className="course-exercise-custom-editor">
+        <div className="course-custom-alert">
+          <CircleAlert size={18} />
+          <span>
+            التعديل هنا يُحفظ <b>داخل هذا الكورس فقط</b> (كورس: {courseName} · اليوم {dayIndex + 1})، دون أي تغيير على مكتبة التمارين الرئيسية في النظام.
+          </span>
+        </div>
+        <div className="form-grid">
+          <label>
+            اسم التمرين داخل هذا الكورس
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="اسم التمرين المخصص للكورس"
+            />
+          </label>
+          <label>
+            المجموعات
+            <input
+              inputMode="numeric"
+              value={sets}
+              onChange={(e) => setSets(e.target.value.replace(/[^0-9٠-٩]/g, ""))}
+            />
+          </label>
+          <label>
+            التكرارات
+            <input
+              dir="ltr"
+              className="reps-input"
+              value={reps}
+              onChange={(e) => setReps(e.target.value)}
+              placeholder="مثال: 12-10-8 أو 12×4"
+            />
+          </label>
+          <label className="full-width-field">
+            ملاحظات التمرين داخل الكورس (اختياري)
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="مثال: آخر جولة دروب سيت أو تركيز على النزول البطيء"
+            />
+          </label>
+          <label className="full-width-field">
+            رابط فيديو شرح التمرين (اختياري)
+            <input
+              dir="ltr"
+              value={video}
+              onChange={(e) => setVideo(e.target.value)}
+              placeholder="https://youtu.be/... أو https://youtube.com/watch?v=..."
+            />
+          </label>
+          {allExercises.length > 0 && (
+            <label className="full-width-field">
+              استبدال بتمرين آخر من المكتبة (اختياري)
+              <select
+                defaultValue=""
+                onChange={(e) => {
+                  const found = allExercises.find((x) => x.id === e.target.value);
+                  if (found) {
+                    setName(found.name);
+                    setMuscle(found.muscle);
+                    if (found.sets) setSets(String(found.sets));
+                    if (found.reps) setReps(found.reps);
+                    if (found.video) setVideo(found.video);
+                    if ("notes" in found && typeof (found as unknown as { notes?: string }).notes === "string") {
+                      setNotes((found as unknown as { notes?: string }).notes || "");
+                    } else if (found.description) {
+                      setNotes(found.description);
+                    }
+                    if (found.image) setImage(found.image);
+                  }
+                }}
+              >
+                <option value="">-- اختر تمريناً بديلاً من المكتبة إذا أردت استبداله --</option>
+                {allExercises.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name} ({x.muscle})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        <div className="modal-actions">
+          <Button secondary onClick={onClose}>إلغاء</Button>
+          <Button onClick={handleSave} icon={<Check size={16} />}>حفظ التعديل داخل الكورس</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function QuickAddExerciseModal({
+  courseName,
+  dayIndex,
+  exercises,
+  muscleList = muscles,
+  onAdd,
+  onClose,
+}: {
+  courseName: string;
+  dayIndex: number;
+  exercises: Exercise[];
+  muscleList?: string[];
+  onAdd: (ex: Exercise) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [filterMuscle, setFilterMuscle] = useState("الكل");
+
+  const filtered = exercises.filter((e) => {
+    const matchMuscle = filterMuscle === "الكل" || e.muscle === filterMuscle || normalizeMuscle(e.muscle) === filterMuscle;
+    const needle = search.trim().toLowerCase();
+    const matchText = !needle || `${e.name} ${e.english || ""}`.toLowerCase().includes(needle);
+    return matchMuscle && matchText;
+  });
+
+  return (
+    <Modal title={`إضافة تمرين إلى اليوم ${dayIndex + 1} — ${courseName}`} onClose={onClose} wide>
+      <div className="quick-add-modal-body">
+        <div className="form-grid" style={{ gridTemplateColumns: "1fr 180px", marginBottom: 12 }}>
+          <label>
+            البحث في التمارين
+            <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث باسم التمرين..." />
+          </label>
+          <label>
+            العضلة
+            <select value={filterMuscle} onChange={(e) => setFilterMuscle(e.target.value)}>
+              <option value="الكل">كل العضلات</option>
+              {muscleList.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="exercise-library-list" style={{ maxHeight: "50vh", overflowY: "auto" }}>
+          {filtered.map((e) => (
+            <button
+              type="button"
+              key={e.id}
+              className="library-exercise-card"
+              onClick={() => { onAdd(e); onClose(); }}
+            >
+              <span className="library-exercise-image">
+                {e.image ? <img src={e.image} alt="" /> : <Dumbbell size={22} />}
+              </span>
+              <span className="library-exercise-content">
+                <strong>{e.name}</strong>
+                <small>{e.muscle} · {e.sets} مجموعات · {e.reps} تكرارات</small>
+              </span>
+              <span className="library-exercise-add"><Plus size={17} /></span>
+            </button>
+          ))}
+          {!filtered.length && <p className="empty-search" style={{ textAlign: "center", padding: 20, color: "var(--muted)" }}>لا توجد نتائج مطابقة</p>}
+        </div>
+        <div className="modal-actions">
+          <Button secondary onClick={onClose}>إغلاق</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function Courses({
   exercises,
   courses,
@@ -2414,11 +2618,24 @@ function Courses({
 }) {
   const [editing, setEditing] = useState<ReadyCourse | null>(null);
   const [show, setShow] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardDay, setWizardDay] = useState(0);
   const [qrCourse, setQrCourse] = useState<ReadyCourse | null>(null);
+  const [editingCourseExercise, setEditingCourseExercise] = useState<{
+    course: ReadyCourse;
+    dayIndex: number;
+    exercise: MemberExercise;
+  } | null>(null);
+  const [addingToCourseDay, setAddingToCourseDay] = useState<{
+    course: ReadyCourse;
+    dayIndex: number;
+  } | null>(null);
+
   const persistCourses = (nextCourses: ReadyCourse[]) => {
     setCourses(nextCourses);
     window.dispatchEvent(new CustomEvent("alasas-save-courses", { detail: { courses: nextCourses } }));
   };
+
   const save = (c: ReadyCourse) => {
     const nextCourses = courses.some((a) => a.id === c.id)
       ? courses.map((a) => (a.id === c.id ? c : a))
@@ -2426,6 +2643,73 @@ function Courses({
     persistCourses(nextCourses);
     setShow(false);
   };
+
+  const openEditExercise = (course: ReadyCourse, dayIndex: number, exercise: MemberExercise) => {
+    setEditingCourseExercise({ course, dayIndex, exercise });
+  };
+
+  const saveEditedExercise = (updated: MemberExercise) => {
+    if (!editingCourseExercise) return;
+    const { course, dayIndex, exercise } = editingCourseExercise;
+    const targetKey = exerciseInstanceKey(exercise);
+    const nextCourses = courses.map((c) => {
+      if (c.id !== course.id) return c;
+      const nextDays = c.days.map((d, dIdx) => {
+        if (dIdx !== dayIndex) return d;
+        return d.map((ex) => {
+          if (exerciseInstanceKey(ex) === targetKey) {
+            return {
+              ...ex,
+              name: updated.name.trim() || ex.name,
+              sets: updated.sets,
+              reps: updated.reps,
+              ...(typeof updated.notes === "string" ? { notes: updated.notes.trim() } : {}),
+              ...(updated.video ? { video: updated.video.trim() } : {}),
+              ...(updated.muscle ? { muscle: updated.muscle } : {}),
+              ...(updated.image ? { image: updated.image } : {}),
+            };
+          }
+          return ex;
+        });
+      });
+      return { ...c, days: nextDays };
+    });
+    persistCourses(nextCourses);
+    setEditingCourseExercise(null);
+  };
+
+  const deleteCourseExercise = (course: ReadyCourse, dayIndex: number, exerciseKey: string) => {
+    if (!window.confirm("حذف هذا التمرين من الكورس؟ لن تتأثر مكتبة التمارين الرئيسية.")) return;
+    const nextCourses = courses.map((c) => {
+      if (c.id !== course.id) return c;
+      const nextDays = c.days.map((d, dIdx) => {
+        if (dIdx !== dayIndex) return d;
+        return d.filter((ex) => exerciseInstanceKey(ex) !== exerciseKey);
+      });
+      return { ...c, days: nextDays };
+    });
+    persistCourses(nextCourses);
+  };
+
+  const addExerciseToCourse = (candidate: Exercise) => {
+    if (!addingToCourseDay) return;
+    const { course, dayIndex } = addingToCourseDay;
+    const newEx: MemberExercise = {
+      ...candidate,
+      instanceId: uid(),
+    };
+    const nextCourses = courses.map((c) => {
+      if (c.id !== course.id) return c;
+      const nextDays = c.days.map((d, dIdx) => {
+        if (dIdx !== dayIndex) return d;
+        return [...d, newEx];
+      });
+      return { ...c, days: nextDays };
+    });
+    persistCourses(nextCourses);
+    setAddingToCourseDay(null);
+  };
+
   return (
     <>
       <section className="section-heading">
@@ -2436,6 +2720,8 @@ function Courses({
         <Button
           onClick={() => {
             setEditing(null);
+            setWizardStep(1);
+            setWizardDay(0);
             setShow(true);
           }}
           icon={<Plus size={17} />}
@@ -2453,18 +2739,34 @@ function Courses({
                   <p>{c.days.length} أيام تدريب{c.notes ? ` · ${c.notes}` : ""}</p>
                 </div>
                 <div className="row-actions">
-                         {showBarcodes && <button onClick={() => setQrCourse(c)}>
-                    <QrCode size={14} />
-                    QR الكورس
-                         </button>}
+                  {showBarcodes && (
+                    <button onClick={() => setQrCourse(c)}>
+                      <QrCode size={14} />
+                      QR الكورس
+                    </button>
+                  )}
+                  <button
+                    title="تعديل تمارين الكورس مباشرة في المحرر"
+                    onClick={() => {
+                      setEditing(c);
+                      setWizardStep(3);
+                      setWizardDay(0);
+                      setShow(true);
+                    }}
+                  >
+                    <Dumbbell size={14} />
+                    تعديل التمارين
+                  </button>
                   <button
                     onClick={() => {
                       setEditing(c);
+                      setWizardStep(1);
+                      setWizardDay(0);
                       setShow(true);
                     }}
                   >
                     <Pencil size={14} />
-                    تعديل
+                    تعديل الكورس
                   </button>
                   <button
                     onClick={() =>
@@ -2493,30 +2795,127 @@ function Courses({
                   </button>
                 </div>
               </div>
-              {c.days.map((day, i) => (
-                <div className="ready-day" key={i}>
-                  <h4>
-                    اليوم {i + 1}{" "}
-                    <small>
-                      {[...new Set(day.map((e) => e.muscle))].join(" + ") ||
-                        "—"}
-                    </small>
-                  </h4>
-                  {day.length ? (
-                    day.map((e, n) => (
-                      <div className="ready-exercise" key={`${e.id}-${n}`}>
-                        <span>{n + 1}</span>
-                        <b>{e.name}{e.notes ? ` (${e.notes})` : ""}</b>
-                        <strong>
-                           {e.sets} × {e.reps}
-                        </strong>
-                      </div>
-                    ))
-                  ) : (
-                    <em>لم تتم إضافة تمارين</em>
-                  )}
-                </div>
-              ))}
+              {c.days.map((day, i) => {
+                const dayMuscles = [...new Set(day.map((e) => e.muscle))].join(" + ") || "—";
+                const blocks = dayBlocks(day);
+                let overallIndex = 0;
+                return (
+                  <div className="ready-day" key={i}>
+                    <div className="ready-day-header">
+                      <h4>
+                        اليوم {i + 1}{" "}
+                        <small>{dayMuscles}</small>
+                      </h4>
+                      <button
+                        type="button"
+                        className="ready-day-edit-btn"
+                        title={`تعديل تمارين اليوم ${i + 1} في محرر الكورس`}
+                        onClick={() => {
+                          setEditing(c);
+                          setWizardStep(3);
+                          setWizardDay(i);
+                          setShow(true);
+                        }}
+                      >
+                        <Pencil size={12} /> تعديل اليوم
+                      </button>
+                    </div>
+                    {c.dayNotes?.[i]?.trim() && (
+                      <p className="ready-day-note">
+                        <b>ملاحظات الكابتن:</b> {c.dayNotes[i]}
+                      </p>
+                    )}
+                    {blocks.length ? (
+                      blocks.map((block) => {
+                        if (block.kind === "superset") {
+                          return (
+                            <div className="ready-superset-card" key={block.id}>
+                              <div className="ready-superset-header">
+                                <span className="ready-superset-badge">
+                                  <Layers3 size={13} /> سوبر تمرين
+                                </span>
+                                <small>تمرينين على نفس الخط داخل مستطيل واحد</small>
+                              </div>
+                              <div className="ready-superset-row">
+                                {block.items.map((e, n) => {
+                                  overallIndex += 1;
+                                  return (
+                                    <div className="ready-superset-item" key={exerciseInstanceKey(e)}>
+                                      <span className="ready-superset-num">{n + 1}</span>
+                                      <div className="ready-superset-content">
+                                        <b>{e.name}{e.notes ? ` (${e.notes})` : ""}</b>
+                                        <small>{e.muscle}</small>
+                                      </div>
+                                      <strong>{e.sets} × {e.reps}</strong>
+                                      <div className="ready-exercise-actions">
+                                        <button
+                                          type="button"
+                                          className="ready-inline-edit-btn"
+                                          title="تعديل هذا التمرين داخل الكورس فقط"
+                                          onClick={() => openEditExercise(c, i, e)}
+                                        >
+                                          <Pencil size={13} />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="ready-inline-delete-btn"
+                                          title="حذف هذا التمرين من الكورس"
+                                          onClick={() => deleteCourseExercise(c, i, exerciseInstanceKey(e))}
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        }
+                        const e = block.items[0];
+                        overallIndex += 1;
+                        return (
+                          <div className="ready-exercise" key={exerciseInstanceKey(e)}>
+                            <span>{overallIndex}</span>
+                            <div className="ready-exercise-info">
+                              <b>{e.name}{e.notes ? ` (${e.notes})` : ""}</b>
+                              <small>{e.muscle}</small>
+                            </div>
+                            <strong>{e.sets} × {e.reps}</strong>
+                            <div className="ready-exercise-actions">
+                              <button
+                                type="button"
+                                className="ready-inline-edit-btn"
+                                title="تعديل هذا التمرين داخل الكورس فقط"
+                                onClick={() => openEditExercise(c, i, e)}
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                className="ready-inline-delete-btn"
+                                title="حذف هذا التمرين من الكورس"
+                                onClick={() => deleteCourseExercise(c, i, exerciseInstanceKey(e))}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <em>لم تتم إضافة تمارين لهذا اليوم</em>
+                    )}
+                    <button
+                      type="button"
+                      className="ready-add-exercise-btn"
+                      onClick={() => setAddingToCourseDay({ course: c, dayIndex: i })}
+                    >
+                      <Plus size={13} /> إضافة تمرين لليوم {i + 1}
+                    </button>
+                  </div>
+                );
+              })}
             </article>
           ))}
         </div>
@@ -2543,6 +2942,26 @@ function Courses({
           </div>
         </Modal>
       )}
+      {editingCourseExercise && (
+        <EditCourseExerciseModal
+          courseName={editingCourseExercise.course.name}
+          dayIndex={editingCourseExercise.dayIndex}
+          exercise={editingCourseExercise.exercise}
+          allExercises={exercises}
+          onSave={saveEditedExercise}
+          onClose={() => setEditingCourseExercise(null)}
+        />
+      )}
+      {addingToCourseDay && (
+        <QuickAddExerciseModal
+          courseName={addingToCourseDay.course.name}
+          dayIndex={addingToCourseDay.dayIndex}
+          exercises={exercises}
+          muscleList={muscleList}
+          onAdd={addExerciseToCourse}
+          onClose={() => setAddingToCourseDay(null)}
+        />
+      )}
       {show && (
         <CourseWizard
           initial={editing}
@@ -2551,6 +2970,8 @@ function Courses({
           onClose={() => setShow(false)}
           onSave={save}
           title={editing ? "تعديل الكورس الجاهز" : "إنشاء كورس جاهز"}
+          initialStep={wizardStep}
+          initialDay={wizardDay}
         />
       )}
     </>
@@ -2563,6 +2984,8 @@ function CourseWizard({
   onClose,
   onSave,
   title,
+  initialStep = 1,
+  initialDay = 0,
 }: {
   initial: ReadyCourse | null;
   exercises: Exercise[];
@@ -2570,12 +2993,15 @@ function CourseWizard({
   onClose: () => void;
   onSave: (c: ReadyCourse) => void;
   title: string;
+  initialStep?: number;
+  initialDay?: number;
 }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(initialStep);
+  const viewOnly = false;
   const [name, setName] = useState(initial?.name || "");
   const [notes, setNotes] = useState(initial?.notes || "");
   const [days, setDays] = useState(initial?.days.length || 3);
-  const [day, setDay] = useState(0);
+  const [day, setDay] = useState(Math.min(initialDay, (initial?.days.length || 3) - 1));
   const [muscle, setMuscle] = useState(muscleList[0] || muscles[0]);
   const [dayNotes, setDayNotes] = useState<string[]>(cloneDayNotes(initial?.dayNotes, initial?.days.length || 3));
   const [selected, setSelected] = useState<DayPlan[]>(
@@ -2733,7 +3159,38 @@ function CourseWizard({
           setDayNote={(value) => setDayNotes((x) => x.map((note, i) => i === day ? value : note))}
         />
       )}{" "}
-      {step === 4 && <Review name={name} notes={notes} dayNotes={dayNotes} days={days} selected={selected} />}
+      {step === 4 && (
+        <Review
+          name={name}
+          notes={notes}
+          dayNotes={dayNotes}
+          days={days}
+          selected={selected}
+          allExercises={exercises}
+          onUpdateExercise={viewOnly ? undefined : (dayIdx, updated) => {
+            setSelected((x) =>
+              x.map((list, i) =>
+                i === dayIdx
+                  ? list.map((e) =>
+                      exerciseInstanceKey(e) === exerciseInstanceKey(updated)
+                        ? updated
+                        : e,
+                    )
+                  : list,
+              ),
+            );
+          }}
+          onDeleteExercise={viewOnly ? undefined : (dayIdx, key) => {
+            setSelected((x) =>
+              x.map((list, i) =>
+                i === dayIdx
+                  ? list.filter((e) => exerciseInstanceKey(e) !== key)
+                  : list,
+              ),
+            );
+          }}
+        />
+      )}
       <WizardActions
         step={step}
         setStep={setStep}
@@ -2807,6 +3264,7 @@ function Picker({
 }) {
   const [query, setQuery] = useState("");
   const [supersetTarget, setSupersetTarget] = useState<string | null>(null);
+  const [detailEditExercise, setDetailEditExercise] = useState<MemberExercise | null>(null);
   const [libraryMuscle, setLibraryMuscle] = useState(muscle);
   const currentDay = selected[day] || [];
   const blocks = dayBlocks(currentDay);
@@ -2820,10 +3278,28 @@ function Picker({
     const key = exerciseInstanceKey(exercise);
     return <div className="course-exercise-editor" key={`${key}-${groupIndex ?? 0}`}>
       <div className="course-exercise-media">{exercise.image ? <img src={exercise.image} alt="" /> : <Dumbbell size={28} />}</div>
-      <div className="course-exercise-copy"><strong>{exercise.name}</strong><span>{exercise.muscle}</span>{exercise.video && <small><Play size={12} /> رابط شرح محفوظ</small>}</div>
+      <div className="course-exercise-copy">
+        <div className="course-exercise-title-row">
+          <strong>{exercise.name}</strong>
+          {!disabled && (
+            <button
+              type="button"
+              className="inline-pen-btn"
+              title="تعديل تفاصيل التمرين المخصص داخل الكورس (الاسم والملاحظات)"
+              onClick={() => setDetailEditExercise(exercise)}
+            >
+              <Pencil size={11} />
+            </button>
+          )}
+        </div>
+        <span>{exercise.muscle}</span>
+        {exercise.notes && <span className="course-exercise-note-badge">{exercise.notes}</span>}
+        {exercise.video && <small><Play size={12} /> رابط شرح محفوظ</small>}
+      </div>
       <label>المجموعات<input disabled={disabled} inputMode="numeric" value={exercise.sets} onChange={(event) => updateSets(key, event.target.value)} /></label>
       <label>التكرارات<input disabled={disabled} dir="ltr" className="reps-input" value={exercise.reps} onChange={(event) => update(key, "reps", event.target.value)} /></label>
       <div className="course-exercise-actions">
+        {!disabled && <button type="button" title="تعديل تفاصيل التمرين المخصص" onClick={() => setDetailEditExercise(exercise)}><Pencil size={15} /></button>}
         {!disabled && groupId && <><button type="button" title="تحريك داخل السوبر" disabled={groupIndex === 0} onClick={() => moveSupersetItem(groupId, key, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك داخل السوبر" disabled={groupIndex === undefined} onClick={() => moveSupersetItem(groupId, key, 1)}><ArrowDown size={15} /></button><button type="button" title="فصل التمرين" onClick={() => detach(key)}><Unlink size={15} /></button></>}
         {!disabled && <button type="button" className="course-remove-button" title="إزالة التمرين" onClick={() => remove(key)}><Trash2 size={15} /></button>}
       </div>
@@ -2866,11 +3342,31 @@ function Picker({
           <label className="coach-day-note"><span><CircleAlert size={16} /> ملاحظات الكابتن</span><textarea disabled={disabled} value={dayNote} onChange={(event) => setDayNote(event.target.value)} placeholder="مثال: جري 5 دقايق + تمارين معدة" maxLength={2000} /></label>
           <div className="selected-exercise-stack">
             {!blocks.length && <div className="course-empty-exercises"><Dumbbell size={27} /><strong>لم تتم إضافة تمارين لهذا اليوم</strong><span>اختر تمريناً من المكتبة ليظهر هنا.</span></div>}
-            {blocks.map((block, blockIndex) => block.kind === "superset" ? <article className="superset-editor-card" key={block.id}><header><div><span className="superset-badge"><Layers3 size={15} /> سوبر تمرين</span><strong>مجموعة {blockIndex + 1}</strong><small>{block.items.length} تمارين مترابطة</small></div><div className="block-order-actions">{!disabled && <><button type="button" title="تحريك المجموعة للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك المجموعة للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button></>}</div></header><div className="superset-editor-items">{block.items.map((exercise, index) => <div key={`${exerciseInstanceKey(exercise)}-${index}`} className="superset-editor-item"><span className="superset-card-index">تمرين {index + 1}</span>{exerciseEditor(exercise, block.id, index)}</div>)}</div><button type="button" className="add-to-superset-button" disabled={disabled} onClick={() => setSupersetTarget(block.items[0] ? exerciseInstanceKey(block.items[0]) : null)}><Plus size={16} /> إضافة تمرين إلى السوبر</button></article> : <article className="selected-exercise-card" key={block.id}><div className="selected-card-top"><GripVertical size={18} className="drag-hint" /><span className="selected-card-number">{blockIndex + 1}</span>{exerciseEditor(block.items[0])}<div className="selected-card-toolbar">{!disabled && <><button type="button" title="تحريك للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button><button type="button" className="add-superset-inline" onClick={() => setSupersetTarget(exerciseInstanceKey(block.items[0]))}><Plus size={15} /> تمرين</button></>}</div></div></article>)}
+            {blocks.map((block, blockIndex) => block.kind === "superset" ? <article className="superset-editor-card" key={block.id}><header><div><span className="superset-badge"><Layers3 size={15} /> سوبر تمرين</span><strong>مجموعة {blockIndex + 1}</strong><small>{block.items.length} تمارين مترابطة على نفس الخط</small></div><div className="block-order-actions">{!disabled && <><button type="button" title="تحريك المجموعة للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك المجموعة للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button></>}</div></header><div className="superset-editor-items">{block.items.map((exercise, index) => <div key={`${exerciseInstanceKey(exercise)}-${index}`} className="superset-editor-item"><span className="superset-card-index">تمرين {index + 1}</span>{exerciseEditor(exercise, block.id, index)}</div>)}</div><button type="button" className="add-to-superset-button" disabled={disabled} onClick={() => setSupersetTarget(block.items[0] ? exerciseInstanceKey(block.items[0]) : null)}><Plus size={16} /> إضافة تمرين إلى السوبر</button></article> : <article className="selected-exercise-card" key={block.id}><div className="selected-card-top"><GripVertical size={18} className="drag-hint" /><span className="selected-card-number">{blockIndex + 1}</span>{exerciseEditor(block.items[0])}<div className="selected-card-toolbar">{!disabled && <><button type="button" title="تحريك للأعلى" disabled={blockIndex === 0} onClick={() => moveBlock(blockIndex, -1)}><ArrowUp size={15} /></button><button type="button" title="تحريك للأسفل" disabled={blockIndex === blocks.length - 1} onClick={() => moveBlock(blockIndex, 1)}><ArrowDown size={15} /></button><button type="button" className="add-superset-inline" onClick={() => setSupersetTarget(exerciseInstanceKey(block.items[0]))}><Plus size={15} /> تمرين</button></>}</div></div></article>)}
           </div>
         </section>
       </div>
       {supersetTarget && <div className="superset-picker-overlay" role="dialog" aria-modal="true" aria-label="إضافة تمرين إلى السوبر"><div className="superset-picker-card"><header><div><span className="section-kicker">اختيار من المكتبة</span><h4>إضافة تمرين إلى السوبر</h4></div><button type="button" className="icon-btn" onClick={() => setSupersetTarget(null)} aria-label="إغلاق"><X size={18} /></button></header><label className="course-search"><Search size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث داخل التمارين..." /></label><div className="superset-picker-list">{filteredExercises.map((exercise) => <button type="button" disabled={disabled} onClick={() => { addToSuperset(supersetTarget, exercise); setSupersetTarget(null); }} key={`${exercise.id}-superset`}><span>{exercise.image ? <img src={exercise.image} alt="" /> : <Dumbbell size={20} />}</span><strong>{exercise.name}</strong><small>{exercise.muscle} · {exercise.reps}</small><Plus size={17} /></button>)}</div></div></div>}
+      {detailEditExercise && (
+        <EditCourseExerciseModal
+          courseName={`اليوم ${day + 1}`}
+          dayIndex={day}
+          exercise={detailEditExercise}
+          allExercises={exercises}
+          onSave={(updated) => {
+            const key = exerciseInstanceKey(detailEditExercise);
+            if (updated.name !== detailEditExercise.name) update(key, "name", updated.name);
+            if (updated.sets !== detailEditExercise.sets) update(key, "sets", String(updated.sets));
+            if (updated.reps !== detailEditExercise.reps) update(key, "reps", updated.reps);
+            if (updated.notes !== detailEditExercise.notes) update(key, "notes", updated.notes || "");
+            if (updated.video !== detailEditExercise.video) update(key, "video", updated.video || "");
+            if (updated.image !== detailEditExercise.image) update(key, "image", updated.image || "");
+            if (updated.muscle !== detailEditExercise.muscle) update(key, "muscle", updated.muscle || "");
+            setDetailEditExercise(null);
+          }}
+          onClose={() => setDetailEditExercise(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2880,16 +3376,29 @@ function Review({
   dayNotes,
   days,
   selected,
+  allExercises = [],
+  onUpdateExercise,
+  onDeleteExercise,
 }: {
   name: string;
   notes?: string;
   dayNotes: string[];
   days: number;
   selected: DayPlan[];
+  allExercises?: Exercise[];
+  onUpdateExercise?: (dayIndex: number, updated: MemberExercise) => void;
+  onDeleteExercise?: (dayIndex: number, key: string) => void;
 }) {
+  const [editingEx, setEditingEx] = useState<{ dayIndex: number; exercise: MemberExercise } | null>(null);
+
   return (
     <div className="wizard-pane">
-      <h3>مراجعة الكورس</h3>
+      <div className="review-header-flex">
+        <div>
+          <h3>مراجعة الكورس</h3>
+          <p>يمكنك مراجعة وتعديل التمارين مباشرة داخل الكورس قبل الحفظ.</p>
+        </div>
+      </div>
       <div className="review-summary">
         <b>{name || "كورس بدون اسم"}</b>
         <span>{days} أيام تدريب{notes ? ` · ${notes}` : ""}</span>
@@ -2902,13 +3411,104 @@ function Review({
           {dayNotes[i] && <p className="review-day-note"><b>ملاحظات:</b> {dayNotes[i]}</p>}
           {list.length ? (
             dayBlocks(list).map((block) => (
-              <div className={block.kind === "superset" ? "review-superset" : "review-exercise-group"} key={block.id}>{block.kind === "superset" && <b className="review-superset-title"><Layers3 size={13} /> سوبر تمرين</b>}{block.items.map((e) => <span key={exerciseInstanceKey(e)}>{e.name} · {e.sets} × {e.reps}{e.notes ? ` — ${e.notes}` : ""}</span>)}</div>
+              block.kind === "superset" ? (
+                <div className="review-superset-card" key={block.id}>
+                  <div className="review-superset-header">
+                    <span className="review-superset-badge"><Layers3 size={13} /> سوبر تمرين</span>
+                    <small>تمرينين على نفس الخط داخل مستطيل واحد</small>
+                  </div>
+                  <div className="review-superset-row">
+                    {block.items.map((e, idx) => (
+                      <div className="review-superset-col" key={exerciseInstanceKey(e)}>
+                        <span className="review-superset-num">{idx + 1}</span>
+                        <div className="review-exercise-info">
+                          <strong>{e.name}</strong>
+                          <small>{e.muscle}{e.notes ? ` · ${e.notes}` : ""}</small>
+                        </div>
+                        <span className="review-exercise-prescription">{e.sets} × {e.reps}</span>
+                        {onUpdateExercise && (
+                          <div className="review-item-actions">
+                            <button
+                              type="button"
+                              className="review-edit-btn"
+                              title="تعديل هذا التمرين داخل الكورس"
+                              onClick={() => setEditingEx({ dayIndex: i, exercise: e })}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            {onDeleteExercise && (
+                              <button
+                                type="button"
+                                className="review-delete-btn"
+                                title="إزالة التمرين"
+                                onClick={() => onDeleteExercise(i, exerciseInstanceKey(e))}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="review-exercise-row" key={block.id}>
+                  {(() => {
+                    const e = block.items[0];
+                    return (
+                      <>
+                        <div className="review-exercise-info">
+                          <strong>{e.name}</strong>
+                          <small>{e.muscle}{e.notes ? ` · ${e.notes}` : ""}</small>
+                        </div>
+                        <span className="review-exercise-prescription">{e.sets} × {e.reps}</span>
+                        {onUpdateExercise && (
+                          <div className="review-item-actions">
+                            <button
+                              type="button"
+                              className="review-edit-btn"
+                              title="تعديل هذا التمرين داخل الكورس"
+                              onClick={() => setEditingEx({ dayIndex: i, exercise: e })}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            {onDeleteExercise && (
+                              <button
+                                type="button"
+                                className="review-delete-btn"
+                                title="إزالة التمرين"
+                                onClick={() => onDeleteExercise(i, exerciseInstanceKey(e))}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )
             ))
           ) : (
             <em>لم تتم إضافة تمارين</em>
           )}
         </div>
       ))}
+      {editingEx && (
+        <EditCourseExerciseModal
+          courseName={name || "الكورس الحالي"}
+          dayIndex={editingEx.dayIndex}
+          exercise={editingEx.exercise}
+          allExercises={allExercises}
+          onSave={(updated) => {
+            if (onUpdateExercise) onUpdateExercise(editingEx.dayIndex, updated);
+            setEditingEx(null);
+          }}
+          onClose={() => setEditingEx(null)}
+        />
+      )}
     </div>
   );
 }
@@ -3054,6 +3654,12 @@ function MembersWithPin({
         }
       }
     }
+  };
+  const savePreview = async (edited: Member) => {
+    const nextMembers = members.map(a => a.id === edited.id ? { ...a, name: edited.name.trim(), courseName: edited.courseName, notes: edited.notes, dayNotes: edited.dayNotes, days: edited.days } : a);
+    const ok = await requestMemberSave({ schemaVersion: 1, settings, exercises, members: nextMembers, courses });
+    if (ok) setMembers(nextMembers);
+    return Boolean(ok);
   };
   const openIssue = (m: Member) => { setPin(''); setPinError(''); setIssueTarget(m); setIssuePhone(memberPhoneDisplay(m)); setIssueCustomPin(''); };
   const issue = async (m: Member, requestedPhone: string, reset = false, customPinValue?: string) => {
@@ -3236,7 +3842,7 @@ function MembersWithPin({
       </tr>;
     })}</tbody></table></div></div> : <Empty icon={<Users size={30} />} title="لا يوجد مشتركون مطابقون" text="أضف مشتركاً جديداً أو غيّر معايير البحث والتصفية." />}
     {(show || editing) && <MemberWizard initial={editing} exercises={exercises} courses={courses} muscleList={muscleList} onClose={() => { setShow(false); setEditing(null); }} onSave={save} viewOnly={!show} />}
-    {previewMember && <PrintPreviewModal member={previewMember} settings={printSettings} onClose={() => setPreviewMember(null)} />}
+    {previewMember && <PrintPreviewModal member={previewMember} settings={printSettings} exercises={exercises} onSave={savePreview} onClose={() => setPreviewMember(null)} />}
   </>;
 }
 
@@ -3563,7 +4169,38 @@ function MemberWizard({
           disabled={viewOnly}
         />
       )}{" "}
-      {step === 4 && <Review name={name} notes={notes} dayNotes={dayNotes} days={days} selected={selected} />}
+      {step === 4 && (
+        <Review
+          name={name}
+          notes={notes}
+          dayNotes={dayNotes}
+          days={days}
+          selected={selected}
+          allExercises={exercises}
+          onUpdateExercise={viewOnly ? undefined : (dayIdx, updated) => {
+            setSelected((x) =>
+              x.map((list, i) =>
+                i === dayIdx
+                  ? list.map((e) =>
+                      exerciseInstanceKey(e) === exerciseInstanceKey(updated)
+                        ? updated
+                        : e,
+                    )
+                  : list,
+              ),
+            );
+          }}
+          onDeleteExercise={viewOnly ? undefined : (dayIdx, key) => {
+            setSelected((x) =>
+              x.map((list, i) =>
+                i === dayIdx
+                  ? list.filter((e) => exerciseInstanceKey(e) !== key)
+                  : list,
+              ),
+            );
+          }}
+        />
+      )}
       <div className="modal-actions">
         <Button
           secondary
@@ -3957,18 +4594,51 @@ function PublicCourseDetail({
                 </h4>
                 {course.dayNotes?.[idx]?.trim() && <div className="member-day-note" aria-label={`ملاحظات الكابتن لليوم ${idx + 1}`}><CircleAlert size={17} /><span><b>ملاحظات الكابتن</b>{course.dayNotes[idx]}</span></div>}
                 {day.length ? (
-                  day.map((e, n) => (
-                    <div className="ready-exercise" key={`${e.id}-${n}`}>
-                      <span>{n + 1}</span>
-                      <b>
-                        <a href={exerciseUrl(e.id)} style={{ color: "inherit", textDecoration: "underline" }}>
-                          {e.name}
-                        </a>
-                        {e.notes ? ` (${e.notes})` : ""}
-                      </b>
-                      <strong>{e.sets} × {e.reps}</strong>
-                    </div>
-                  ))
+                  dayBlocks(day).map((block, bIdx) => {
+                    if (block.kind === "superset") {
+                      return (
+                        <div className="ready-superset-card" key={block.id}>
+                          <div className="ready-superset-header">
+                            <span className="ready-superset-badge"><Layers3 size={12} /> سوبر تمرين</span>
+                            <small>تمرينين على نفس الخط داخل مستطيل واحد</small>
+                          </div>
+                          <div className="ready-superset-row">
+                            {block.items.map((e, n) => (
+                              <div className="ready-superset-item" key={exerciseInstanceKey(e)}>
+                                <span className="ready-superset-num">{n + 1}</span>
+                                <div className="ready-superset-content">
+                                  <b>
+                                    <a href={exerciseUrl(e.id)} style={{ color: "inherit", textDecoration: "underline" }}>
+                                      {e.name}
+                                    </a>
+                                    {e.notes ? ` (${e.notes})` : ""}
+                                  </b>
+                                  <small>{e.muscle}</small>
+                                </div>
+                                <strong>{e.sets} × {e.reps}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                    const e = block.items[0];
+                    return (
+                      <div className="ready-exercise" key={exerciseInstanceKey(e)}>
+                        <span>{bIdx + 1}</span>
+                        <div className="ready-exercise-info">
+                          <b>
+                            <a href={exerciseUrl(e.id)} style={{ color: "inherit", textDecoration: "underline" }}>
+                              {e.name}
+                            </a>
+                            {e.notes ? ` (${e.notes})` : ""}
+                          </b>
+                          <small>{e.muscle}</small>
+                        </div>
+                        <strong>{e.sets} × {e.reps}</strong>
+                      </div>
+                    );
+                  })
                 ) : (
                   <em>لا توجد تمارين لهذا اليوم</em>
                 )}
@@ -4407,7 +5077,14 @@ function Modal({
   );
   return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
-function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
+/**
+ * Defence in depth for the generated print document: no script of any kind,
+ * no network access except images, no base/form hijacking. Printing is driven
+ * by the opener (see printMember), so the document itself needs no script.
+ */
+const PRINT_DOCUMENT_CSP = "default-src 'none'; img-src https: data: 'self'; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'";
+type PrintableMember = Member & { dayTitles?: string[] };
+function buildPrintMemberHtml(m: PrintableMember, s: SettingsData) {
   const qrMarkup = (e: MemberExercise) => {
     if (!s.showBarcodes) return "";
     const target = exerciseQrTarget(e);
@@ -4419,30 +5096,30 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
   const rows = (day: DayPlan) => {
     let number = 0;
     return dayBlocks(day).map((block) => {
-      const label = block.kind === "superset"
-        ? `<tr class="superset-label"><td colspan="${s.showBarcodes ? 4 : 3}"><strong>سوبر تمرين</strong><small>مجموعة مترابطة · ${block.items.length} تمارين</small></td></tr>`
-        : "";
       if (block.kind === "superset") {
-        const columns = Math.min(block.items.length, 2);
-        const cards = block.items.map((e) => {
+        // One <tr> for the whole superset: every exercise is a sub-row inside a single cell,
+        // so no extra table row (or label row) is ever produced and it never splits across pages.
+        const columns = s.showBarcodes ? "46fr 15fr 18fr 15fr" : "46fr 15fr 18fr";
+        const cards = block.items.map((e, index) => {
           number += 1;
           const target = exerciseQrTarget(e);
+          const label = index === 0 ? '<span class="ss-tag">سوبر</span>' : "";
           const qr = s.showBarcodes
-            ? `<div style="display:grid;place-items:center;min-height:15mm">${target ? renderToStaticMarkup(<QRCodeSVG value={target} size={52} includeMargin level="M" />) : `<span style="font-size:7px;color:#666;text-align:center">لا يوجد رابط فيديو لهذا التمرين</span>`}</div>`
+            ? `<div class="ss-qr">${target ? renderToStaticMarkup(<QRCodeSVG value={target} size={64} includeMargin level="M" />) : `<span class="qr-unavailable">لا يوجد رابط فيديو لهذا التمرين</span>`}</div>`
             : "";
-          return `<article class="print-superset-card" style="display:grid;gap:2mm;border:1px solid #cfd3d0;border-radius:2mm;padding:3mm;break-inside:avoid;page-break-inside:avoid;background:#fff"><div><strong style="display:block;font-size:10px">${number}. ${escapeHtml(e.name)}</strong><small style="display:block;color:#555;font-size:8px;margin-top:1mm">${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:2mm;text-align:center;font-size:8px"><span><b style="display:block;font-size:7px;color:#666">المجموعات</b>${escapeHtml(String(e.sets ?? "—"))}</span><span><b style="display:block;font-size:7px;color:#666">التكرارات</b>${escapeHtml(e.reps || "—")}</span></div>${qr}</article>`;
+          return `<div class="ss-item" style="grid-template-columns:${columns}"><div class="exercise-name"><strong>${label}${number}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></div><div class="num">${escapeHtml(String(e.sets ?? "—"))}</div><div>${escapeHtml(e.reps || "—")}</div>${qr}</div>`;
         }).join("");
-        return `${label}<tr class="superset-row"><td colspan="${s.showBarcodes ? 4 : 3}"><div class="print-superset-grid" style="display:grid;grid-template-columns:repeat(${columns},minmax(0,1fr));gap:3mm;break-inside:avoid;page-break-inside:avoid">${cards}</div></td></tr>`;
+        return `<tr class="superset-row"><td class="ss-cell" colspan="${s.showBarcodes ? 4 : 3}"><div class="print-superset-grid">${cards}</div></td></tr>`;
       }
-      const items = block.items.map((e) => {
+      return block.items.map((e) => {
         number += 1;
-        return `<tr class="${block.kind === "superset" ? "superset-row" : ""}"><td class="exercise-name"><strong>${number}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td>${qrMarkup(e)}</tr>`;
+        return `<tr><td class="exercise-name"><strong>${number}. ${escapeHtml(e.name)}</strong><small>${escapeHtml(e.muscle)}${e.notes ? ` · ${escapeHtml(e.notes)}` : ""}</small></td><td class="num">${escapeHtml(String(e.sets ?? "—"))}</td><td>${escapeHtml(e.reps || "—")}</td>${qrMarkup(e)}</tr>`;
       }).join("");
-      return label + items;
     }).join("");
   };
   const coachPhoto = s.printCoachPhotoUrl || s.coachPhoto;
   const hallPhoto = s.printHallPhotoUrl || s.hallPhoto;
+  const gymLogoAlt = "شعار " + (s.gymName || "القاعة");
   const footerNote = escapeHtml(s.printFooterNote || "").replace(/\n/g, "<br>");
   const memberNotes = escapeHtml(m.notes || "");
   const whatsappContact = s.whatsapp || s.phone;
@@ -4451,57 +5128,208 @@ function buildPrintMemberHtml(m: Member, s: SettingsData, autoPrint = true) {
     whatsappContact ? `<span class="social"><span class="social-icon">${renderToStaticMarkup(<WhatsAppMark />)}</span>${escapeHtml(whatsappContact)}</span>` : "",
     s.instagram ? `<span class="social"><span class="social-icon">${renderToStaticMarkup(<InstagramMark />)}</span>${escapeHtml(s.instagram)}</span>` : "",
   ].join("");
-  return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
-    @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day-note{display:grid;gap:1mm;margin:0 3mm 3mm;padding:2.5mm 3mm;border:1px solid #cfd3d0;border-radius:2mm;background:#f7f8f7;break-inside:avoid;page-break-inside:avoid;white-space:pre-wrap;line-height:1.75}.day-note strong{font-size:10px;font-weight:700;text-align:right}.day-note span{display:block;font-size:10px;text-align:right;white-space:pre-wrap}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:46%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:15%}.day th:nth-child(3),.day td:nth-child(3){width:18%}.day th:nth-child(4),.day td:nth-child(4){width:15%}.day th:nth-child(5),.day td:nth-child(5){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.footer .social{display:inline-flex;align-items:center;gap:1.5mm}.footer .social-icon{display:inline-grid;place-items:center}.footer .social svg{width:4mm;height:4mm}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
-  </style></head><body><header class="header"><div class="coach">${coachPhoto ? `<img src="${coachPhoto}" alt="صورة الكابتن">` : ""}</div><div class="brand">${s.logo ? `<img src="${s.logo}" alt="شعار ${escapeHtml(s.gymName)}">` : `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
+  return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PRINT_DOCUMENT_CSP}"><title>${escapeHtml(m.name)} — ${escapeHtml(s.gymName)}</title><style>
+    @page{size:210mm 297mm;margin:8mm}*{box-sizing:border-box}body{font-family:'IBM Plex Sans Arabic',Arial,Tahoma,sans-serif;color:#171917;margin:0;background:#fff;direction:rtl}.header{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;align-items:center;min-height:42mm;direction:ltr}.coach{text-align:left;direction:rtl;display:flex;align-items:center;gap:8px}.coach img{width:32mm;height:32mm;border-radius:50%;object-fit:cover;object-position:top;border:1px solid #b7ff2a}.brand{text-align:center;direction:rtl}.brand img{max-width:45mm;max-height:30mm;object-fit:contain}.brand strong{display:block;font-size:11px;margin-top:2px}.member{text-align:right;font-size:12px;line-height:1.75;font-weight:700;direction:rtl}.member b{font-weight:400;color:#555}.rule{height:2px;background:#b7ff2a;margin:2mm 0 5mm}.day{border:1px solid #222;border-radius:3mm;padding:0 0 2mm;margin:0 0 6mm;background:#fff;break-inside:auto}.day-title{min-width:52mm;max-width:120mm;margin:-4mm auto 2mm;background:#fff;border:1px solid #555;border-radius:2mm;text-align:center;padding:1.5mm 3mm;font-size:15px;font-weight:700}.day-note{display:grid;gap:1mm;margin:0 3mm 3mm;padding:2.5mm 3mm;border:1px solid #cfd3d0;border-radius:2mm;background:#f7f8f7;break-inside:avoid;page-break-inside:avoid;white-space:pre-wrap;line-height:1.75}.day-note strong{font-size:10px;font-weight:700;text-align:right}.day-note span{display:block;font-size:10px;text-align:right;white-space:pre-wrap}.day table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;background:#fff}.day thead{display:table-header-group}.day tr{break-inside:avoid;page-break-inside:avoid}.day th,.day td{border:1px solid #cfd3d0;padding:1.6mm 1.5mm;vertical-align:middle;text-align:center}.day th{background:#f0f1f0;font-size:10px}.day th:nth-child(1),.day td:nth-child(1){width:46%;text-align:right}.day th:nth-child(2),.day td:nth-child(2){width:15%}.day th:nth-child(3),.day td:nth-child(3){width:18%}.day th:nth-child(4),.day td:nth-child(4){width:15%}.day th:nth-child(5),.day td:nth-child(5){width:10%}.exercise-name small{display:block;color:#555;font-size:8px;margin-top:1mm}.day td.ss-cell{padding:0;width:auto;text-align:center;border-right:2px solid #b7ff2a}.ss-item{display:grid;align-items:center;text-align:center;padding:1.6mm 1.5mm;border-top:1px solid #cfd3d0;break-inside:avoid;page-break-inside:avoid}.ss-item:first-child{border-top:0}.ss-item .exercise-name{text-align:right}.ss-tag{display:inline-block;background:#eef8d2;border:1px solid #b7ff2a;border-radius:1mm;font-size:7px;padding:0 1.2mm;margin-left:1.5mm}.ss-qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.ss-qr svg{width:13mm;height:13mm}.qr-unavailable{font-size:7px;color:#666}.num{font-weight:700}.qr{width:15mm;height:15mm;margin:auto;display:grid;place-items:center}.qr svg{width:13mm;height:13mm}.course-qr{display:flex;align-items:center;gap:4mm;border:1px solid #cfd3d0;border-radius:3mm;padding:3mm;background:#fff}.course-qr svg{width:19mm;height:19mm}.course-qr strong{font-size:10px;max-width:55mm;line-height:1.7}.footer{border-top:1px solid #222;margin-top:3mm;padding:3mm 0;display:flex;align-items:center;justify-content:space-between;gap:4mm;font-size:9px;break-inside:avoid;flex-wrap:wrap}.footer span{white-space:nowrap}.footer .social{display:inline-flex;align-items:center;gap:1.5mm}.footer .social-icon{display:inline-grid;place-items:center}.footer .social svg{width:4mm;height:4mm}.empty{padding:5mm;text-align:center;color:#666}.login-qr{display:flex;justify-content:center;margin-top:4mm;break-inside:avoid}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+  </style></head><body><header class="header"><div class="coach">${printImageTag(coachPhoto, "صورة الكابتن")}</div><div class="brand">${printImageTag(s.logo, gymLogoAlt) || `<strong>${escapeHtml(s.gymName)}</strong>`}<strong>${escapeHtml(s.coachName)}</strong>${m.courseName ? `<small style="display:block;font-size:10px;color:#444">${escapeHtml(m.courseName)}</small>` : ""}</div><div class="member">${s.showDate ? `<div><b>تاريخ الاشتراك:</b> ${escapeHtml(m.createdAt || "—")}</div>` : ""}${m.expiresAt ? `<div><b>تاريخ الانتهاء:</b> ${escapeHtml(m.expiresAt)}</div>` : ""}<div><b>الاسم:</b> ${escapeHtml(m.name)}</div><div><b>رقم العضوية:</b> ${escapeHtml(m.membershipId || m.id)}</div>${s.showWeight ? `<div><b>الوزن:</b> ${escapeHtml(m.weight || "—")}</div>` : ""}${s.showHeight ? `<div><b>الطول:</b> ${escapeHtml(m.height || "—")}</div>` : ""}</div></header><div class="rule"></div>${memberNotes ? `<div style="margin:0 0 4mm;padding:2mm 3mm;border:1px dashed #666;border-radius:2mm;font-size:10px"><b>ملاحظات الكابتن:</b> ${memberNotes}</div>` : ""}${m.days.map((day, i) => {
     const dayMuscles = [...new Set(day.map((e) => e.muscle))].filter(Boolean).join(" + ");
      const note = m.dayNotes?.[i]?.trim() ? `<div class="day-note"><strong>ملاحظات الكابتن</strong><span>${escapeHtml(m.dayNotes[i])}</span></div>` : "";
-     return `<section class="day"><h2 class="day-title">اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}</h2>${note}${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th>${s.showBarcodes ? "<th>QR</th>" : ""}</tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
-  }).join("")}${s.showBarcodes ? `<div class="login-qr">${courseQrMarkup}</div>` : ""}<footer class="footer">${socialFooter}${s.address ? `<span>${escapeHtml(s.address)}</span>` : ""}${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer>${autoPrint ? `<script>async function ready(){if(document.fonts?.ready)await document.fonts.ready;await Promise.all([...document.images].map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=r;i.onerror=r})));await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));window.focus();window.print()}window.addEventListener('load',ready)</script>` : ""}</body></html>`;
+     const dayTitle = m.dayTitles?.[i]?.trim() ? escapeHtml(m.dayTitles[i].trim()) : `اليوم ${i + 1}${dayMuscles ? ` — ${escapeHtml(dayMuscles)}` : ""}`;
+     return `<section class="day"><h2 class="day-title">${dayTitle}</h2>${note}${day.length ? `<table><thead><tr><th>التمرين</th><th>المجموعات</th><th>التكرارات</th>${s.showBarcodes ? "<th>QR</th>" : ""}</tr></thead><tbody>${rows(day)}</tbody></table>` : '<div class="empty">لا توجد تمارين لهذا اليوم</div>'}</section>`;
+  }).join("")}${s.showBarcodes ? `<div class="login-qr">${courseQrMarkup}</div>` : ""}<footer class="footer">${socialFooter}${s.address ? `<span>${escapeHtml(s.address)}</span>` : ""}${footerNote ? `<span>${footerNote}</span>` : ""}<strong>© 2026 جميع الحقوق محفوظة لشركة الأساس للحلول البرمجية · Version ${escapeHtml(APP_VERSION)}</strong></footer></body></html>`;
 }
+const cleanSingleSupersets = (day: DayPlan): DayPlan => {
+  const counts = new Map<string, number>();
+  day.forEach((e) => { if (e.supersetId) counts.set(e.supersetId, (counts.get(e.supersetId) || 0) + 1); });
+  return day.map((e) => {
+    if (!e.supersetId || (counts.get(e.supersetId) || 0) > 1) return e;
+    const { supersetId: _g, supersetOrder: _o, ...rest } = e;
+    return rest;
+  });
+};
 function PrintPreviewModal({
   member,
   settings,
+  exercises,
+  onSave,
   onClose,
 }: {
   member: Member;
   settings: SettingsData;
+  exercises: Exercise[];
+  onSave: (member: Member) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const html = buildPrintMemberHtml(member, settings, false);
+  // Draft lives only here: nothing touches the stored member until "حفظ التعديلات".
+  const [draft, setDraft] = useState<PrintableMember>(() => ({
+    ...member,
+    days: member.days.map((day) => day.map((e) => ({ ...e }))),
+    dayNotes: cloneDayNotes(member.dayNotes, member.days.length),
+    dayTitles: member.days.map(() => ""),
+  }));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("");
+  const [libraryPick, setLibraryPick] = useState("");
+  const html = useMemo(() => buildPrintMemberHtml(draft, settings), [draft, settings]);
+  const patch = (changes: Partial<PrintableMember>) => { setDraft((d) => ({ ...d, ...changes })); setDirty(true); setStatus(""); };
+  const setDay = (dayIndex: number, update: (day: DayPlan) => DayPlan) =>
+    patch({ days: draft.days.map((day, i) => i === dayIndex ? cleanSingleSupersets(update(day)) : day) });
+  const patchExercise = (dayIndex: number, key: string, changes: Partial<MemberExercise>) =>
+    setDay(dayIndex, (day) => day.map((e) => exerciseInstanceKey(e) === key ? { ...e, ...changes } : e));
+  const removeExercise = (dayIndex: number, key: string) =>
+    setDay(dayIndex, (day) => day.filter((e) => exerciseInstanceKey(e) !== key));
+  const moveBlock = (dayIndex: number, blockIndex: number, direction: -1 | 1) =>
+    setDay(dayIndex, (day) => {
+      const blocks = dayBlocks(day);
+      const target = blockIndex + direction;
+      if (target < 0 || target >= blocks.length) return day;
+      [blocks[blockIndex], blocks[target]] = [blocks[target], blocks[blockIndex]];
+      return flattenDayBlocks(blocks);
+    });
+  const moveInsideSuperset = (dayIndex: number, groupId: string, key: string, direction: -1 | 1) =>
+    setDay(dayIndex, (day) => {
+      const blocks = dayBlocks(day);
+      const block = blocks.find((item) => item.kind === "superset" && item.id === groupId);
+      if (!block) return day;
+      const from = block.items.findIndex((e) => exerciseInstanceKey(e) === key);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= block.items.length) return day;
+      [block.items[from], block.items[to]] = [block.items[to], block.items[from]];
+      block.items = block.items.map((e, i) => ({ ...e, supersetOrder: i }));
+      return flattenDayBlocks(blocks);
+    });
+  const addExercise = (dayIndex: number) => {
+    const source = exercises.find((e) => e.id === libraryPick);
+    const created: MemberExercise = source
+      ? { ...source, instanceId: uid() }
+      : { id: `custom-${uid()}`, instanceId: uid(), name: "تمرين جديد", muscle: "", sets: 3, reps: "12", rest: "" };
+    setDay(dayIndex, (day) => [...day, created]);
+  };
+  const save = async () => {
+    setSaving(true);
+    setStatus("");
+    try {
+      const { dayTitles: _titles, ...persisted } = draft;
+      validateDayPlans(persisted.days);
+      if (!persisted.name.trim()) throw new Error("اسم المتدرب مطلوب");
+      const ok = await onSave(persisted);
+      if (ok) { setDirty(false); setStatus("تم حفظ التعديلات في قاعدة البيانات."); }
+      else setStatus("تعذر الحفظ. لم تتغير البيانات الأصلية.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "تعذر الحفظ.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const iconButton = (label: string, onClick: () => void, icon: React.ReactNode, disabled = false) => (
+    <button type="button" className="icon-btn" title={label} aria-label={label} disabled={disabled} onClick={onClick}>{icon}</button>
+  );
+  const exerciseFields = (dayIndex: number, e: MemberExercise, controls: React.ReactNode) => {
+    const key = exerciseInstanceKey(e);
+    return (
+      <div className="pp-exercise" key={key}>
+        <input aria-label="اسم التمرين" value={e.name} onChange={(ev) => patchExercise(dayIndex, key, { name: ev.target.value })} />
+        <input aria-label="المجموعات" inputMode="numeric" value={String(e.sets ?? "")} onChange={(ev) => patchExercise(dayIndex, key, { sets: ev.target.value })} />
+        <input aria-label="التكرارات" value={e.reps} onChange={(ev) => patchExercise(dayIndex, key, { reps: ev.target.value })} />
+        <input className="pp-wide" aria-label="ملاحظات التمرين" placeholder="ملاحظات التمرين" value={e.notes || ""} onChange={(ev) => patchExercise(dayIndex, key, { notes: ev.target.value })} />
+        <div className="pp-controls">{controls}</div>
+      </div>
+    );
+  };
   return (
     <Modal title={`معاينة طباعة A4 — ${member.name}`} onClose={onClose} wide>
-      <div className="print-preview-modal-body">
+      <div className="print-preview-modal-body pp-layout">
+        <aside className="pp-editor" aria-label="تعديل محتوى الطباعة">
+          <p className="pp-hint">التعديلات هنا تظهر فوراً في المعاينة وفي الطباعة، ولا تُحفظ في قاعدة البيانات إلا عند الضغط على «حفظ التعديلات».</p>
+          <label>اسم المتدرب<input value={draft.name} onChange={(ev) => patch({ name: ev.target.value })} /></label>
+          <label>عنوان الدورة<input value={draft.courseName || ""} onChange={(ev) => patch({ courseName: ev.target.value })} /></label>
+          <label>ملاحظات الكابتن<textarea rows={3} value={draft.notes || ""} onChange={(ev) => patch({ notes: ev.target.value })} /></label>
+          {draft.days.map((day, dayIndex) => (
+            <section className="pp-day" key={dayIndex}>
+              <label>عنوان اليوم {dayIndex + 1}<input placeholder="تلقائي (اليوم + العضلات)" value={draft.dayTitles?.[dayIndex] || ""} onChange={(ev) => patch({ dayTitles: (draft.dayTitles || []).map((t, i) => i === dayIndex ? ev.target.value : t) })} /></label>
+              <label>ملاحظات اليوم<textarea rows={2} value={draft.dayNotes?.[dayIndex] || ""} onChange={(ev) => patch({ dayNotes: (draft.dayNotes || []).map((t, i) => i === dayIndex ? ev.target.value : t) })} /></label>
+              <div className="pp-columns" aria-hidden="true"><span>التمرين</span><span>المجموعات</span><span>التكرارات</span></div>
+              {dayBlocks(day).map((block, blockIndex, blocks) => (
+                <div className={block.kind === "superset" ? "pp-block pp-superset" : "pp-block"} key={block.id}>
+                  {block.kind === "superset" && <b className="pp-tag">سوبر تمرين</b>}
+                  {block.items.map((e, itemIndex) => exerciseFields(dayIndex, e, <>
+                    {block.kind === "superset"
+                      ? <>
+                          {iconButton("تقديم داخل السوبر", () => moveInsideSuperset(dayIndex, block.id, exerciseInstanceKey(e), -1), <ArrowUp size={14} />, itemIndex === 0)}
+                          {iconButton("تأخير داخل السوبر", () => moveInsideSuperset(dayIndex, block.id, exerciseInstanceKey(e), 1), <ArrowDown size={14} />, itemIndex === block.items.length - 1)}
+                        </>
+                      : <>
+                          {iconButton("تحريك للأعلى", () => moveBlock(dayIndex, blockIndex, -1), <ArrowUp size={14} />, blockIndex === 0)}
+                          {iconButton("تحريك للأسفل", () => moveBlock(dayIndex, blockIndex, 1), <ArrowDown size={14} />, blockIndex === blocks.length - 1)}
+                        </>}
+                    {iconButton("حذف التمرين من المعاينة", () => removeExercise(dayIndex, exerciseInstanceKey(e)), <Trash2 size={14} />)}
+                  </>))}
+                  {block.kind === "superset" && <div className="pp-controls pp-block-move">
+                    {iconButton("تحريك السوبر للأعلى", () => moveBlock(dayIndex, blockIndex, -1), <ArrowUp size={14} />, blockIndex === 0)}
+                    {iconButton("تحريك السوبر للأسفل", () => moveBlock(dayIndex, blockIndex, 1), <ArrowDown size={14} />, blockIndex === blocks.length - 1)}
+                    <small>تحريك المجموعة كاملة</small>
+                  </div>}
+                </div>
+              ))}
+              <div className="pp-add">
+                <select aria-label="اختيار تمرين من المكتبة" value={libraryPick} onChange={(ev) => setLibraryPick(ev.target.value)}>
+                  <option value="">تمرين فارغ</option>
+                  {exercises.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+                <button type="button" className="secondary-btn" onClick={() => addExercise(dayIndex)}><Plus size={15} /> إضافة تمرين</button>
+              </div>
+            </section>
+          ))}
+        </aside>
         <iframe
           title={`معاينة طباعة ${member.name}`}
           className="print-preview-frame"
+          // No scripts, forms, popups or same-origin access: the preview is static
+          // markup and must never reach the admin origin (storage, auth, DOM).
+          sandbox=""
+          referrerPolicy="no-referrer"
           srcDoc={html}
         />
-        <div className="modal-actions">
-          <Button secondary onClick={onClose}>إغلاق</Button>
-          <Button onClick={() => printMember(member, settings)} icon={<Printer size={16} />}>
-            طباعة A4 الآن
-          </Button>
-        </div>
+      </div>
+      <div className="modal-actions">
+        <Button secondary onClick={onClose}>إغلاق</Button>
+        <Button secondary onClick={() => void save()} disabled={!dirty || saving}>{saving ? "جارٍ الحفظ…" : "حفظ التعديلات"}</Button>
+        <Button onClick={() => printMember(draft, settings)} icon={<Printer size={16} />}>
+          طباعة A4 الآن
+        </Button>
+        {status && <span className="pp-status" role="status">{status}</span>}
+        {dirty && !status && <span className="pp-status">تعديلات غير محفوظة (تنطبق على الطباعة فقط)</span>}
       </div>
     </Modal>
   );
 }
-function printMember(m: Member, s: SettingsData) {
-  const html = buildPrintMemberHtml(m, s, true);
+function printMember(m: PrintableMember, s: SettingsData) {
+  const html = buildPrintMemberHtml(m, s);
   const w = window.open("", "_blank");
   if (!w) return;
+  // The print window must not be able to navigate or script back into the admin app.
+  w.opener = null;
   w.document.write(html);
   w.document.close();
-}
-function escapeHtml(value: string) {
-  return String(value ?? "").replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ] || c,
-  );
+  // The document carries no script (CSP script-src 'none'); wait for fonts and
+  // images here, then print.
+  const printWhenReady = async () => {
+    try {
+      if (w.document.fonts?.ready) await w.document.fonts.ready;
+      await Promise.all(
+        [...w.document.images].map((img) =>
+          img.complete ? Promise.resolve() : new Promise<void>((resolve) => { img.onload = () => resolve(); img.onerror = () => resolve(); }),
+        ),
+      );
+      await new Promise<void>((resolve) => w.requestAnimationFrame(() => w.requestAnimationFrame(() => resolve())));
+      w.focus();
+      w.print();
+    } catch {
+      /* window was closed before printing */
+    }
+  };
+  if (w.document.readyState === "complete") void printWhenReady();
+  else w.addEventListener("load", () => void printWhenReady(), { once: true });
 }
 type UiErrorBoundaryState = { error: Error | null };
 class UiErrorBoundary extends Component<
@@ -4548,7 +5376,7 @@ function RootRouter() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const adminRoute = window.location.pathname.replace(/\/+$/, "").endsWith("/admin");
+  const adminRoute = isAdminPath(window.location.pathname);
   if (hash.startsWith("#/exercise/")) {
     const id = decodeURIComponent(hash.slice(11));
     return <PublicExerciseDetail exerciseId={id} />;

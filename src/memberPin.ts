@@ -117,12 +117,12 @@ export async function revokeMemberAccess(memberId: string) {
 
 export async function loginMemberWithPin(phone: string, pin: string) {
   if (!/^\d{4}$/.test(pin)) throw new Error('PIN يجب أن يتكون من 4 أرقام')
-  const result = await request<{ member?: MemberPinProfile; sessionToken?: string; customToken?: string }>('/v1/member/login', {
+  const result = await request<{ member?: MemberPinProfile; sessionToken?: string }>('/v1/member/login', {
     method: 'POST',
     body: JSON.stringify({ phone: normalizeIraqiPhone(phone), pin }),
   })
   if (result.member?.active === false) throw new Error('العضوية غير فعالة')
-  if (!result.sessionToken && !result.customToken) throw new Error('جلسة المشترك غير صالحة')
+  if (!result.sessionToken) throw new Error('جلسة المشترك غير صالحة')
   return result
 }
 

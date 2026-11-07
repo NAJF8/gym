@@ -6,14 +6,15 @@ const main = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf8')
 const sync = await readFile(new URL('../src/dataSync.ts', import.meta.url), 'utf8')
 const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
 
-test('superset presentation keeps independent cards in editor, member portal, and print', () => {
+test('superset presentation renders one table row in print and cards elsewhere', () => {
   assert.match(main, /className="superset-editor-items"/)
   assert.match(main, /className="member-superset-items"/)
   assert.match(main, /className="member-superset-items">\{block\.items\.map\(\(exercise, index\) => renderExercise\(exercise, index\)\)\}/)
   assert.doesNotMatch(main, /className="member-superset-item"/)
-  assert.match(main, /grid-template-columns:repeat\(\$\{columns\}/)
+  assert.match(main, /class="ss-item" style="grid-template-columns:\$\{columns\}"/)
   assert.match(main, /class="print-superset-grid"/)
-  assert.match(main, /const columns = Math\.min\(block\.items\.length, 2\)/)
+  assert.match(main, /class="superset-row"><td class="ss-cell"/)
+  assert.doesNotMatch(main, /superset-label/)
   assert.match(main, /dayBlocks\(day\)/)
   assert.match(styles, /\.superset-editor-items\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)
   assert.match(styles, /\.member-superset-items\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)

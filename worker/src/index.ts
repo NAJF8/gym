@@ -1,4 +1,4 @@
-import { base64ToBytes, constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS } from "./crypto.ts";
+import { base64ToBytes, constantTimeEqual, decryptPin, derivePin, encryptPin, hashPin, isPin, normalizePhone, randomPin, PBKDF2_ITERATIONS, PIN_HASH_ALGORITHM } from "./crypto.ts";
 import { applyInvitation, cancelInvitation, claimLatestInvitation, createInvitation, expireInvitation, normalizeInvitationEmail, validInvitationRole } from "./invitations.ts";
 
 interface Env {
@@ -520,8 +520,24 @@ function bearerToken(request: Request) {
   return request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
 }
 
-function requestSource(request: Request) {
-  return request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+/**
+ * Rate-limit identity of the caller. `cf-connecting-ip` is set by Cloudflare's
+ * edge and overwrites any client-supplied value, so it is the only header
+ * trusted in production. `x-forwarded-for` is client-controlled unless a
+ * trusted proxy sits in front, so it is honoured only by the local emulator.
+ * The value is length/charset-validated so it is safe inside a bucket key.
+ */
+function requestSource(request: Request, env?: Env) {
+  const raw = request.headers.get("cf-connecting-ip")
+    || (env && localEmulator(env) ? request.headers.get("x-forwarded-for")?.split(",")[0] : "")
+    || "";
+  const value = raw.trim().toLowerCase();
+  return value.length > 0 && value.length <= 45 && /^[0-9a-f:.]+$/.test(value) ? value : "unknown";
+}
+
+/** Server-side pepper for a stored credential; legacy (pre-pepper) rows have none. */
+function storedHashPepper(env: Env, hashAlgorithm?: string | null) {
+  return hashAlgorithm === PIN_HASH_ALGORITHM ? pinCipherSecret(env) : undefined;
 }
 
 function sessionToken() {
@@ -597,7 +613,7 @@ async function issuePin(env: Env, request: Request) {
   const identity = memberIdentity(member, body.memberId, phone);
   await assertCredentialIdentityAvailable(env, identity);
   const pin = isPin(body.customPin) ? body.customPin : randomPin();
-  const credential = await hashPin(pin);
+  const credential = await hashPin(pin, pinCipherSecret(env));
   const pinCipher = await encryptPin(pin, pinCipherSecret(env), body.memberId);
   const now = Date.now();
   const reset = body.reset === true;
@@ -607,8 +623,8 @@ async function issuePin(env: Env, request: Request) {
       await alignCredentialIdentity(env, identity, now);
     return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: null, existing: true, hasCipher: Boolean(existing.pin_cipher), credentialVersion: existing.credential_version }, 200, cors(env, request.headers.get("origin") || ""));
   }
-  const statement = "INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?)";
-  const values = [crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()] as const;
+  const statement = "INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?)";
+  const values = [crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PIN_HASH_ALGORITHM, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()] as const;
   if (reset) {
     await env.PIN_DB.prepare(`${statement} ON CONFLICT(member_id) DO UPDATE SET firebase_uid=excluded.firebase_uid, phone_e164=excluded.phone_e164, membership_id=excluded.membership_id, pin_hash=excluded.pin_hash, pin_salt=excluded.pin_salt, pin_cipher=excluded.pin_cipher, hash_algorithm=excluded.hash_algorithm, hash_iterations=excluded.hash_iterations, status='ACTIVE', failure_count=0, locked_until=NULL, credential_version=member_credentials.credential_version + 1, updated_at=excluded.updated_at, last_pin_changed_at=excluded.last_pin_changed_at`).bind(...values).run();
     await env.PIN_DB.prepare("UPDATE member_sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL").bind(now, body.memberId).run();
@@ -622,7 +638,7 @@ async function issuePin(env: Env, request: Request) {
     await recordPinAudit(env, "PIN_ISSUED", actorUid, body.memberId, 1);
   }
   await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key IN (?, ?)").bind(`account:${body.memberId}`, `phone:${phone}`).run();
-  await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key = ? OR (locked_until IS NOT NULL AND locked_until <= ?)").bind(`source:${requestSource(request)}`, now).run();
+  await env.PIN_DB.prepare("DELETE FROM pin_attempt_buckets WHERE bucket_key = ? OR (locked_until IS NOT NULL AND locked_until <= ?)").bind(`source:${requestSource(request, env)}`, now).run();
   return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin }, 200, cors(env, request.headers.get("origin") || ""));
 }
 
@@ -636,12 +652,12 @@ async function revealPin(env: Env, request: Request) {
   const now = Date.now();
   const identity = memberIdentity(member, body.memberId, storedPhone);
   await assertCredentialIdentityAvailable(env, identity);
-  const row = await env.PIN_DB.prepare("SELECT status, pin_cipher, pin_hash, pin_salt, credential_version, phone_e164, firebase_uid, membership_id FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; pin_cipher: string | null; pin_hash: unknown; pin_salt: unknown; credential_version: number; phone_e164: string; firebase_uid?: string; membership_id?: string }>();
+  const row = await env.PIN_DB.prepare("SELECT status, pin_cipher, pin_hash, pin_salt, hash_algorithm, credential_version, phone_e164, firebase_uid, membership_id FROM member_credentials WHERE member_id = ?").bind(body.memberId).first<{ status: string; pin_cipher: string | null; pin_hash: unknown; pin_salt: unknown; hash_algorithm?: string | null; credential_version: number; phone_e164: string; firebase_uid?: string; membership_id?: string }>();
   if (!row) {
     const pin = randomPin();
-    const credential = await hashPin(pin);
+    const credential = await hashPin(pin, pinCipherSecret(env));
     const pinCipher = await encryptPin(pin, pinCipherSecret(env), body.memberId);
-    await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PBKDF2-SHA256', ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO NOTHING").bind(crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
+    await env.PIN_DB.prepare("INSERT INTO member_credentials (credential_id, member_id, firebase_uid, membership_id, phone_e164, pin_hash, pin_salt, pin_cipher, hash_algorithm, hash_iterations, status, failure_count, locked_until, credential_version, created_at, updated_at, last_pin_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 0, NULL, 1, ?, ?, ?) ON CONFLICT(member_id) DO NOTHING").bind(crypto.randomUUID(), identity.memberId, identity.firebaseUid, identity.membershipId, identity.phoneE164, credential.hash, credential.salt, pinCipher, PIN_HASH_ALGORITHM, PBKDF2_ITERATIONS, new Date(now).toISOString(), new Date(now).toISOString(), new Date(now).toISOString()).run();
     await recordPinAudit(env, "PIN_ISSUED", actorUid, body.memberId, 1);
     await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, 1);
     return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin, credentialVersion: 1, source: "issued" }, 200, cors(env, request.headers.get("origin") || ""));
@@ -651,7 +667,7 @@ async function revealPin(env: Env, request: Request) {
   if (row.status !== "ACTIVE") throw new Error("PIN_NOT_ACTIVE");
   if (!row.pin_cipher) {
     if (isPin(body.candidatePin)) {
-      const verified = constantTimeEqual(await derivePin(body.candidatePin, storedBytes(row.pin_salt)), storedBytes(row.pin_hash));
+      const verified = constantTimeEqual(await derivePin(body.candidatePin, storedBytes(row.pin_salt), storedHashPepper(env, row.hash_algorithm)), storedBytes(row.pin_hash));
       if (verified) {
         const pinCipher = await encryptPin(body.candidatePin, pinCipherSecret(env), body.memberId);
         await env.PIN_DB.prepare("UPDATE member_credentials SET pin_cipher = ?, updated_at = ? WHERE member_id = ?").bind(pinCipher, new Date(now).toISOString(), body.memberId).run();
@@ -660,10 +676,10 @@ async function revealPin(env: Env, request: Request) {
       }
     }
     const newPin = randomPin();
-    const credential = await hashPin(newPin);
+    const credential = await hashPin(newPin, pinCipherSecret(env));
     const pinCipher = await encryptPin(newPin, pinCipherSecret(env), body.memberId);
     const nextVersion = (row.credential_version ?? 1) + 1;
-    await env.PIN_DB.prepare("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, pin_cipher = ?, hash_algorithm = 'PBKDF2-SHA256', hash_iterations = ?, failure_count = 0, locked_until = NULL, credential_version = ?, updated_at = ?, last_pin_changed_at = ? WHERE member_id = ?").bind(credential.hash, credential.salt, pinCipher, PBKDF2_ITERATIONS, nextVersion, new Date(now).toISOString(), new Date(now).toISOString(), body.memberId).run();
+    await env.PIN_DB.prepare("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, pin_cipher = ?, hash_algorithm = ?, hash_iterations = ?, failure_count = 0, locked_until = NULL, credential_version = ?, updated_at = ?, last_pin_changed_at = ? WHERE member_id = ?").bind(credential.hash, credential.salt, pinCipher, PIN_HASH_ALGORITHM, PBKDF2_ITERATIONS, nextVersion, new Date(now).toISOString(), new Date(now).toISOString(), body.memberId).run();
     await recordPinAudit(env, "PIN_RESET", actorUid, body.memberId, nextVersion);
     await recordPinAudit(env, "PIN_REVEALED", actorUid, body.memberId, nextVersion);
     return json({ memberId: identity.memberId, membershipId: identity.membershipId, phoneE164: identity.phoneE164, pin: newPin, credentialVersion: nextVersion, source: "rotated_legacy" }, 200, cors(env, request.headers.get("origin") || ""));
@@ -683,19 +699,40 @@ async function pinAuditLogs(env: Env, request: Request) {
   }
 }
 
+/**
+ * Lazy migration: a legacy (unpeppered) credential that just verified is
+ * re-hashed with the server pepper. Same schema and credential_version; the
+ * compare-and-set on pin_hash prevents overwriting a concurrent PIN reset.
+ * Failure to upgrade never blocks a valid login.
+ */
+async function upgradeLegacyCredential(env: Env, memberId: string, pin: string, oldHash: unknown, now: number) {
+  try {
+    const credential = await hashPin(pin, pinCipherSecret(env));
+    await env.PIN_DB.prepare("UPDATE member_credentials SET pin_hash = ?, pin_salt = ?, hash_algorithm = ?, hash_iterations = ?, updated_at = ? WHERE member_id = ? AND pin_hash = ?")
+      .bind(credential.hash, credential.salt, PIN_HASH_ALGORITHM, PBKDF2_ITERATIONS, new Date(now).toISOString(), memberId, oldHash instanceof Uint8Array ? oldHash : String(oldHash)).run();
+  } catch {
+    // Keep the legacy credential; it remains verifiable and is retried at next login.
+  }
+}
+
 async function memberLogin(env: Env, request: Request) {
   const body = await request.json() as { phone?: unknown; pin?: unknown };
   if (!isPin(body.pin)) return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || ""));
   let phone: string;
   try { phone = normalizePhone(body.phone); } catch { return json({ error: "بيانات الدخول غير صحيحة" }, 401, cors(env, request.headers.get("origin") || "")); }
-  const row = await env.PIN_DB.prepare("SELECT * FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; pin_salt: unknown; pin_hash: unknown; failure_count: number; locked_until: number | null; status: string }>();
+  const row = await env.PIN_DB.prepare("SELECT * FROM member_credentials WHERE phone_e164 = ?").bind(phone).first<{ member_id: string; pin_salt: unknown; pin_hash: unknown; hash_algorithm?: string | null; failure_count: number; locked_until: number | null; status: string }>();
   const now = Date.now();
-  // Known accounts get a five-attempt bucket. Unknown phones share one
-  // bounded bucket so arbitrary probes cannot create unbounded D1 rows.
-  const keys = [row?.member_id ? `account:${row.member_id}` : "unknown:global", `source:${requestSource(request)}`];
+  // Known accounts get a five-attempt bucket. Unknown phones are isolated per
+  // request source (never one global bucket), so one attacker probing random
+  // numbers can only exhaust their own bucket and cannot lock out real
+  // members. Row growth stays bounded by the number of distinct sources.
+  const source = requestSource(request, env);
+  const keys = [row?.member_id ? `account:${row.member_id}` : `unknown:${source}`, `source:${source}`];
   const limited = await rateLimited(env, keys, now);
   const salt = row ? storedBytes(row.pin_salt) : crypto.getRandomValues(new Uint8Array(16));
-  const actual = await derivePin(body.pin, salt);
+  // Unknown phones are derived with the pepper too, so every attempt costs the
+  // same single PBKDF2 run. Legacy rows (pre-pepper) are verified unpeppered.
+  const actual = await derivePin(body.pin, salt, row ? storedHashPepper(env, row.hash_algorithm) : pinCipherSecret(env));
   const matches = Boolean(row && row.status === "ACTIVE" && (row.locked_until ?? 0) <= now && constantTimeEqual(actual, storedBytes(row.pin_hash)));
   if (limited) {
     return json({ error: "بيانات الدخول غير صحيحة" }, 429, cors(env, request.headers.get("origin") || ""));
@@ -710,6 +747,7 @@ async function memberLogin(env: Env, request: Request) {
   }
   const { member, appData } = await readMember(env, row.member_id);
   if (member.active === false) return json({ error: "بيانات الدخول غير صحيحة", reason: "MEMBER_INACTIVE" }, 403, cors(env, request.headers.get("origin") || ""));
+  if (row.hash_algorithm !== PIN_HASH_ALGORITHM) await upgradeLegacyCredential(env, row.member_id, body.pin, row.pin_hash, now);
   await env.PIN_DB.prepare("UPDATE member_credentials SET failure_count = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE member_id = ?").bind(new Date(now).toISOString(), new Date(now).toISOString(), row.member_id).run();
   await clearAccountRateFailure(env, row.member_id, now);
   return json({ member: publicMember(member, appData), sessionToken: await createSession(env, row.member_id, now) }, 200, cors(env, request.headers.get("origin") || ""));
