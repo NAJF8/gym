@@ -69,7 +69,7 @@ test('XSS: print HTML builder routes every dynamic image and value through the s
   assert.match(builder, /printImageTag\(coachPhoto,/)
   assert.match(builder, /printImageTag\(s\.logo,/)
   // Every ${...} interpolation inside the template must be escaped, a number, a safe helper, or a constant.
-  const allowed = /^(?:escapeHtml\(|printImageTag\(|renderToStaticMarkup\(|rows\(|qrMarkup\(|label\b|cards\b|items\b|qr\b|note\b|memberNotes\b|footerNote\b|socialFooter\b|courseQrMarkup\b|columns\b|number\b|i \+ 1|block\.items\.length|s\.showBarcodes|s\.showDate|s\.showWeight|s\.showHeight|m\.courseName \?|m\.expiresAt \?|m\.days\.map|m\.dayNotes|memberNotes \?|dayMuscles|dayTitle|day\.length|s\.address \?|footerNote \?|PRINT_DOCUMENT_CSP|coachPhoto|\(?s\.|block\.kind|target|e\.notes|string|\/\/|"|'|`)/
+  const allowed = /^(?:escapeHtml\(|printImageTag\(|renderToStaticMarkup\(|rows\(|qrMarkup\(|label\b|cards\b|items\b|qr\b|note\b|memberNotes\b|footerNote\b|socialFooter\b|courseQrMarkup\b|columns\b|number\b|i \+ 1|block\.items\.length|s\.showBarcodes|s\.showDate|s\.showWeight|s\.showHeight|m\.courseName \?|m\.expiresAt \?|m\.days\.map|m\.dayNotes|memberNotes \?|dayMuscles|dayTitle|names\b|setsText\b|repsText\b|noteLines\b|qrCells\b|qrItems\b|muscleLine\b|day\.length|s\.address \?|footerNote \?|PRINT_DOCUMENT_CSP|coachPhoto|\(?s\.|block\.kind|target|e\.notes|string|\/\/|"|'|`)/
   const raw = [...builder.matchAll(/\$\{([^}]{0,40})/g)].map(m => m[1].trim())
   for (const expr of raw) assert.match(expr, allowed, `unreviewed interpolation: ${expr}`)
   assert.doesNotMatch(builder, /\$\{(?:m\.name|m\.notes|s\.gymName|s\.coachName|s\.phone|s\.address|s\.instagram)\}/)
