@@ -57,6 +57,7 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy RTDB rules to Production
+        continue-on-error: true
         if: steps.rules.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GYM1_4F1BB }}
